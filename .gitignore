@@ -1,0 +1,8 @@
+files/catalog/*
+files/dcu/*
+files/dotnet/*
+files/Windows_11_x64/*
+files/config.psd1
+files/Download.log
+files/DriverPackCatalog.cab
+files/DriverPackDB.xml

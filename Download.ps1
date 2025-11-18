@@ -1,0 +1,653 @@
+# ============================
+# Dell Driver Pack Downloader - Enhanced Version
+# Features: Progress bars, Parallel downloads, Version tracking
+# Author: Jobin Das (jobindas82)
+# GitHub: https://github.com/jobindas82
+# Email: jobindas82@gmail.com
+# ============================
+
+#Requires -Version 5.1
+
+# Initialize files directory first
+$FilesRoot = Join-Path $PSScriptRoot "files"
+if (!(Test-Path $FilesRoot)) { 
+    New-Item -ItemType Directory -Path $FilesRoot -Force | Out-Null 
+}
+
+# Check if config file exists in files directory
+$configPath = Join-Path $FilesRoot "config.psd1"
+$sampleConfigPath = Join-Path $FilesRoot "config.sample.psd1"
+
+if (!(Test-Path $configPath)) {
+    Write-Host ""
+    Write-Host "===============================================================================" -ForegroundColor Yellow
+    Write-Host "                          CONFIGURATION REQUIRED                               " -ForegroundColor Yellow
+    Write-Host "===============================================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Config file not found: config.psd1" -ForegroundColor Red
+    Write-Host ""
+    
+    if (Test-Path $sampleConfigPath) {
+        Write-Host "Creating config.psd1 from sample..." -ForegroundColor Cyan
+        Copy-Item $sampleConfigPath $configPath
+        Write-Host "Config file created successfully!" -ForegroundColor Green
+    } else {
+        Write-Host "Sample config file not found. Creating default config..." -ForegroundColor Cyan
+        
+        # Create default config
+        $defaultConfig = @"
+@{
+    FilesRoot      = ".\files"
+    CatalogUrl     = "https://dl.dell.com/catalog/DriverPackCatalog.cab"
+    DriverURL      = "https://dl.dell.com"
+    CatalogCABFile = ".\files\DriverPackCatalog.cab"
+    CatalogXMLFile = ".\files\catalog\DriverPackCatalog.xml"
+    
+    DcuUrl         = "https://dl.dell.com/FOLDER13309338M/3/Dell-Command-Update-Application_Y5VJV_WIN64_5.5.0_A00_02.EXE"
+    DcuFileName    = "Dell-Command-Update-Setup.exe"
+    
+    DotNetUrl      = "https://download.visualstudio.microsoft.com/download/pr/907765b0-2bf8-494e-93aa-5ef9553c5d68/a9308dc010617e6716c0e6abd53b05ce/windowsdesktop-runtime-8.0.11-win-x64.exe"
+    DotNetFileName = "windowsdesktop-runtime-8.0-win-x64.exe"
+
+    TargetModels   = @(
+        "Latitude 5440"
+    )
+
+    TargetOS       = "Windows 11 x64"
+}
+"@
+        Set-Content -Path $configPath -Value $defaultConfig
+        Write-Host "Default config file created!" -ForegroundColor Green
+    }
+    
+    Write-Host ""
+    Write-Host "===============================================================================" -ForegroundColor Yellow
+    Write-Host "                          PLEASE UPDATE CONFIG FILE                            " -ForegroundColor Yellow
+    Write-Host "===============================================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Before running this script, please:" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  1. Open: $configPath" -ForegroundColor Cyan
+    Write-Host "  2. Update 'TargetModels' with your Dell computer models" -ForegroundColor Cyan
+    Write-Host "  3. Update 'TargetOS' if needed (Windows 10 x64 or Windows 11 x64)" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "To find your Dell model name, run this command:" -ForegroundColor White
+    Write-Host "  (Get-CimInstance Win32_ComputerSystem).Model" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Press any key to open config file in Notepad..." -ForegroundColor Green
+    Write-Host ""
+    
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    Start-Process notepad.exe $configPath
+    
+    Write-Host "After updating the config file, run this script again." -ForegroundColor Yellow
+    Write-Host ""
+    exit 0
+}
+
+# Load config
+$config = Import-PowerShellDataFile -Path $configPath
+
+$FilesRoot = $config.FilesRoot
+$CatalogUrl = $config.CatalogUrl
+$DriverURL = $config.DriverURL
+$CatalogCABFile = $config.CatalogCABFile
+$CatalogXMLFile = $config.CatalogXMLFile
+$TargetModels = $config.TargetModels
+$TargetOS = $config.TargetOS
+$DcuUrl = $config.DcuUrl
+$DcuFileName = $config.DcuFileName
+$DotNetUrl = $config.DotNetUrl
+$DotNetFileName = $config.DotNetFileName
+
+# Paths
+$LogFile = Join-Path $FilesRoot "Download.log"
+$DatabaseFile = Join-Path $FilesRoot "DriverPackDB.xml"
+$MaxParallelDownloads = 3
+
+# Initialize
+if (!(Test-Path $FilesRoot)) { New-Item -ItemType Directory -Path $FilesRoot -Force | Out-Null }
+
+# ============================
+# UI Helper Functions
+# ============================
+
+function Write-ColorOutput {
+    param(
+        [string]$Message,
+        [string]$Type = "Info"
+    )
+    
+    $colors = @{
+        'Info' = 'Cyan'
+        'Success' = 'Green'
+        'Warning' = 'Yellow'
+        'Error' = 'Red'
+        'Header' = 'Magenta'
+    }
+    
+    $prefix = switch ($Type) {
+        'Info'    { '[+]' }
+        'Success' { '[OK]' }
+        'Warning' { '[!]' }
+        'Error'   { '[X]' }
+        'Header'  { '[#]' }
+    }
+    
+    Write-Host "$prefix $Message" -ForegroundColor $colors[$Type]
+    Write-Log "$prefix $Message"
+}
+
+function Write-Separator {
+    param([string]$Char = "=", [int]$Length = 80)
+    Write-Host ($Char * $Length) -ForegroundColor DarkGray
+}
+
+function Write-Header {
+    param([string]$Title)
+    Write-Host ""
+    Write-Separator
+    Write-Host "  $Title" -ForegroundColor Magenta
+    Write-Separator
+    Write-Host ""
+}
+
+function Write-Log {
+    param([string]$Message)
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    Add-Content -Path $LogFile -Value "$timestamp`t$Message" -ErrorAction SilentlyContinue
+}
+
+function Show-ProgressBar {
+    param(
+        [string]$Activity,
+        [string]$Status,
+        [int]$PercentComplete,
+        [int]$Id = 0
+    )
+    Write-Progress -Activity $Activity -Status $Status -PercentComplete $PercentComplete -Id $Id
+}
+
+# ============================
+# Database Functions
+# ============================
+
+function Initialize-Database {
+    if (!(Test-Path $DatabaseFile)) {
+        $db = @{
+            LastUpdate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            DriverPacks = @()
+        }
+        $db | Export-Clixml -Path $DatabaseFile
+        Write-ColorOutput "Database initialized" "Success"
+    }
+}
+
+function Get-Database {
+    if (Test-Path $DatabaseFile) {
+        return Import-Clixml -Path $DatabaseFile
+    }
+    return @{ LastUpdate = $null; DriverPacks = @() }
+}
+
+function Save-Database {
+    param($Database)
+    $Database.LastUpdate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    $Database | Export-Clixml -Path $DatabaseFile
+}
+
+function Get-DriverPackFromDB {
+    param(
+        [string]$Model,
+        [string]$OS,
+        $Database
+    )
+    return $Database.DriverPacks | Where-Object { $_.Model -eq $Model -and $_.OS -eq $OS } | Select-Object -First 1
+}
+
+function Add-DriverPackToDB {
+    param(
+        [string]$Model,
+        [string]$OS,
+        [string]$Version,
+        [string]$Hash,
+        [string]$FilePath,
+        $Database
+    )
+    
+    $existing = Get-DriverPackFromDB -Model $Model -OS $OS -Database $Database
+    if ($existing) {
+        $Database.DriverPacks = $Database.DriverPacks | Where-Object { -not ($_.Model -eq $Model -and $_.OS -eq $OS) }
+    }
+    
+    $Database.DriverPacks += @{
+        Model = $Model
+        OS = $OS
+        Version = $Version
+        Hash = $Hash
+        FilePath = $FilePath
+        Downloaded = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+}
+
+# ============================
+# Download Functions
+# ============================
+
+function Get-FileHashMD5 {
+    param([string]$FilePath)
+    if (Test-Path $FilePath) {
+        return (Get-FileHash -Path $FilePath -Algorithm MD5).Hash
+    }
+    return $null
+}
+
+function Get-Catalog {
+    Write-ColorOutput "Downloading Dell Driver Pack Catalog..." "Header"
+    Show-ProgressBar -Activity "Catalog Download" -Status "Downloading catalog..." -PercentComplete 0
+    
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Headers.Add("User-Agent", "Mozilla/5.0")
+        $webClient.DownloadFile($CatalogUrl, $CatalogCABFile)
+        
+        Show-ProgressBar -Activity "Catalog Download" -Status "Extracting catalog..." -PercentComplete 50
+        
+        $extractFolder = Split-Path $CatalogXMLFile -Parent
+        if (!(Test-Path $extractFolder)) { New-Item -ItemType Directory -Path $extractFolder -Force | Out-Null }
+        
+        $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+        if (!(Test-Path $sevenZip)) {
+            throw "7-Zip not found at $sevenZip"
+        }
+        
+        & $sevenZip x "$CatalogCABFile" -o"$extractFolder" -y | Out-Null
+        
+        if (!(Test-Path $CatalogXMLFile)) {
+            throw "Catalog XML not found after extraction"
+        }
+        
+        Show-ProgressBar -Activity "Catalog Download" -Status "Complete" -PercentComplete 100
+        Write-ColorOutput "Catalog downloaded and extracted successfully" "Success"
+    }
+    catch {
+        Write-ColorOutput "Catalog download failed: $_" "Error"
+        throw
+    }
+    finally {
+        Write-Progress -Activity "Catalog Download" -Completed
+    }
+}
+
+function Start-ParallelDownload {
+    param(
+        [array]$DownloadJobs,
+        $Database
+    )
+    
+    $totalJobs = $DownloadJobs.Count
+    if ($totalJobs -eq 0) {
+        Write-ColorOutput "No driver packs to download" "Warning"
+        return
+    }
+    
+    Write-ColorOutput "Starting parallel download of $totalJobs driver pack(s)..." "Header"
+    
+    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxParallelDownloads)
+    $runspacePool.Open()
+    $runspaces = @()
+    
+    $scriptBlock = {
+        param($Url, $Destination, $ExpectedHash, $Model, $OS)
+        
+        $result = @{
+            Success = $false
+            Model = $Model
+            OS = $OS
+            FilePath = $Destination
+            Hash = $ExpectedHash
+            Error = $null
+        }
+        
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.Headers.Add("User-Agent", "Mozilla/5.0")
+            $webClient.DownloadFile($Url, $Destination)
+            
+            if (Test-Path $Destination) {
+                # Use MD5 hash to match Dell's catalog
+                $hash = (Get-FileHash -Path $Destination -Algorithm MD5).Hash
+                if ($hash -eq $ExpectedHash) {
+                    $result.Success = $true
+                } else {
+                    $result.Error = "Hash mismatch (Expected: $ExpectedHash, Got: $hash)"
+                    Remove-Item $Destination -Force -ErrorAction SilentlyContinue
+                }
+            } else {
+                $result.Error = "File not created"
+            }
+        }
+        catch {
+            $result.Error = $_.Exception.Message
+        }
+        
+        return $result
+    }
+    
+    foreach ($job in $DownloadJobs) {
+        $ps = [powershell]::Create().AddScript($scriptBlock).AddArgument($job.Url).AddArgument($job.Destination).AddArgument($job.Hash).AddArgument($job.Model).AddArgument($job.OS)
+        $ps.RunspacePool = $runspacePool
+        
+        $runspaces += @{
+            Pipe = $ps
+            Status = $ps.BeginInvoke()
+            Job = $job
+        }
+    }
+    
+    $completed = 0
+    while ($runspaces.Status.IsCompleted -contains $false) {
+        $completedNow = ($runspaces.Status.IsCompleted | Where-Object { $_ -eq $true }).Count
+        if ($completedNow -ne $completed) {
+            $completed = $completedNow
+            $percent = [math]::Round(($completed / $totalJobs) * 100)
+            Show-ProgressBar -Activity "Downloading Driver Packs" -Status "Downloaded $completed of $totalJobs" -PercentComplete $percent
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    
+    Write-Progress -Activity "Downloading Driver Packs" -Completed
+    
+    $successCount = 0
+    foreach ($runspace in $runspaces) {
+        $result = $runspace.Pipe.EndInvoke($runspace.Status)
+        $runspace.Pipe.Dispose()
+        
+        if ($result.Success) {
+            Write-ColorOutput "Downloaded: $($result.Model) - $($result.OS)" "Success"
+            Add-DriverPackToDB -Model $result.Model -OS $result.OS -Version "Latest" -Hash $result.Hash -FilePath $result.FilePath -Database $Database
+            $successCount++
+        } else {
+            Write-ColorOutput "Failed: $($result.Model) - $($result.OS) - $($result.Error)" "Error"
+        }
+    }
+    
+    $runspacePool.Close()
+    $runspacePool.Dispose()
+    
+    Write-ColorOutput "Download complete: $successCount/$totalJobs succeeded" "Header"
+}
+
+# ============================
+# Prerequisites Download Functions
+# ============================
+
+function Download-Prerequisite {
+    param(
+        [string]$Url,
+        [string]$Destination,
+        [string]$Name
+    )
+    
+    if (Test-Path $Destination) {
+        Write-ColorOutput "$Name already exists, skipping download" "Success"
+        return
+    }
+    
+    Write-ColorOutput "Downloading $Name..." "Info"
+    Show-ProgressBar -Activity "$Name Download" -Status "Downloading..." -PercentComplete 0
+    
+    try {
+        $destFolder = Split-Path $Destination -Parent
+        if (!(Test-Path $destFolder)) { 
+            New-Item -ItemType Directory -Path $destFolder -Force | Out-Null 
+        }
+        
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Headers.Add("User-Agent", "Mozilla/5.0")
+        
+        # Download with progress
+        $webClient.DownloadFile($Url, $Destination)
+        
+        if (Test-Path $Destination) {
+            $fileSize = (Get-Item $Destination).Length / 1MB
+            Write-ColorOutput "$Name downloaded successfully ($([math]::Round($fileSize, 2)) MB)" "Success"
+            Show-ProgressBar -Activity "$Name Download" -Status "Complete" -PercentComplete 100
+            Start-Sleep -Milliseconds 500
+            Write-Progress -Activity "$Name Download" -Completed
+            return
+        } else {
+            throw "File not created after download"
+        }
+    }
+    catch {
+        Write-ColorOutput "Failed to download ${Name}: $($_.Exception.Message)" "Error"
+        Write-Progress -Activity "$Name Download" -Completed
+        if (Test-Path $Destination) {
+            Remove-Item $Destination -Force -ErrorAction SilentlyContinue
+        }
+        return
+    }
+}
+
+function Download-Prerequisites {
+    Write-Header "CHECKING PREREQUISITES"
+    
+    # Download Dell Command Update
+    $dcuPath = Join-Path $FilesRoot "dcu\$DcuFileName"
+    Download-Prerequisite -Url $DcuUrl -Destination $dcuPath -Name "Dell Command Update"
+    
+    Write-Host ""
+    
+    # Download .NET Desktop Runtime
+    $dotNetPath = Join-Path $FilesRoot "dotnet\$DotNetFileName"
+    Download-Prerequisite -Url $DotNetUrl -Destination $dotNetPath -Name ".NET Desktop Runtime"
+    
+    Write-Host ""
+}
+
+# ============================
+# Main Logic
+# ============================
+
+function Get-Driver-Pack {
+    Clear-Host
+    Write-Host ""
+    Write-Host "===============================================================================" -ForegroundColor Cyan
+    Write-Host "                                                                               " -ForegroundColor Cyan
+    Write-Host "           Dell Driver Pack Downloader - Enhanced Edition                     " -ForegroundColor Cyan
+    Write-Host "           Author: Jobin Das (jobindas82@gmail.com)                           " -ForegroundColor Cyan
+    Write-Host "           GitHub: https://github.com/jobindas82                              " -ForegroundColor Cyan
+    Write-Host "                                                                               " -ForegroundColor Cyan
+    Write-Host "===============================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    Download-Prerequisites
+    
+    Initialize-Database
+    $database = Get-Database
+    
+    Write-Header "DOWNLOADING CATALOG"
+    Get-Catalog
+    
+    Write-Header "ANALYZING DRIVER PACKS"
+    [XML]$Catalog = Get-Content $CatalogXMLFile
+    $DriverPackages = $Catalog.DriverPackManifest.DriverPackage
+    
+    $downloadJobs = @()
+    $skippedCount = 0
+    
+    Write-ColorOutput "Searching for driver packs matching target models..." "Info"
+    Write-Host ""
+    
+    foreach ($pkg in $DriverPackages) {
+        if (-not $pkg.SupportedSystems.Brand.Model) { continue }
+        
+        $modelNode = $pkg.SupportedSystems.Brand.Model
+        
+        $models = @()
+        if ($modelNode -is [array]) {
+            foreach ($m in $modelNode) {
+                if ($m.name) { 
+                    $models += $m.name.Trim()
+                }
+            }
+        } else {
+            if ($modelNode.name) {
+                $models += $modelNode.name.Trim()
+            }
+        }
+        
+        $models = $models | Select-Object -Unique
+        
+        $matchedModel = $null
+        foreach ($model in $models) {
+            foreach ($targetModel in $TargetModels) {
+                if ($model -ieq $targetModel) {
+                    $matchedModel = $model
+                    break
+                }
+            }
+            if ($matchedModel) { break }
+        }
+        
+        if (-not $matchedModel) { continue }
+        
+        Write-Host ""
+        Write-Host ">> Model: $matchedModel" -ForegroundColor White
+        
+        $supportedOSList = $pkg.SupportedOperatingSystems.OperatingSystem
+        if (-not $supportedOSList) { 
+            Write-ColorOutput "  No OS information found" "Warning"
+            continue 
+        }
+        
+        if ($supportedOSList -isnot [array]) {
+            $supportedOSList = @($supportedOSList)
+        }
+        
+        foreach ($os in $supportedOSList) {
+            $osDisplay = $null
+            
+            if ($os.Display) {
+                if ($os.Display.'#cdata-section') {
+                    $osDisplay = $os.Display.'#cdata-section'
+                } elseif ($os.Display.'#text') {
+                    $osDisplay = $os.Display.'#text'
+                } elseif ($os.Display -is [string]) {
+                    $osDisplay = $os.Display
+                }
+            }
+            
+            if ([string]::IsNullOrWhiteSpace($osDisplay)) { continue }
+            $osDisplay = $osDisplay.Trim()
+            
+            Write-ColorOutput "   OS: $osDisplay" "Info"
+            
+            $isTargetOS = $false
+            if ($TargetOS -is [array]) {
+                foreach ($targetOS in $TargetOS) {
+                    if ($osDisplay -ieq $targetOS) {
+                        $isTargetOS = $true
+                        break
+                    }
+                }
+            } else {
+                if ($osDisplay -ieq $TargetOS) {
+                    $isTargetOS = $true
+                }
+            }
+            
+            if (-not $isTargetOS) { 
+                Write-ColorOutput "   [SKIP] Not target OS" "Warning"
+                continue 
+            }
+            
+            $downloadPath = "$DriverURL/$($pkg.path)"
+            
+            # Extract the original file extension from the download path
+            $originalFileName = [System.IO.Path]::GetFileName($pkg.path)
+            $fileExtension = [System.IO.Path]::GetExtension($originalFileName)
+            
+            $destFolder = "$FilesRoot\$($osDisplay.Replace(' ', '_'))\$($matchedModel.Replace(' ', '_'))"
+            if (!(Test-Path $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force | Out-Null }
+            
+            # Use "pack" as base name but keep the original extension
+            $fileName = Join-Path $destFolder "pack$fileExtension"
+            
+            $expectedHash = $null
+            if ($pkg.hashMD5) {
+                $expectedHash = $pkg.hashMD5
+                Write-ColorOutput "   Hash (MD5): $expectedHash" "Info"
+            } else {
+                Write-ColorOutput "   Warning: No MD5 hash found for this package, skipping for safety" "Warning"
+                continue
+            }
+            
+            $existingPack = Get-DriverPackFromDB -Model $matchedModel -OS $osDisplay -Database $database
+            if ($existingPack -and $existingPack.Hash -eq $expectedHash -and (Test-Path $fileName)) {
+                Write-ColorOutput "   [CACHED] Already up-to-date (hash matches)" "Success"
+                $skippedCount++
+                continue
+            }
+            
+            Write-ColorOutput "   [QUEUE] Added to download queue (${originalFileName})" "Info"
+            $pkgName = "Driver Pack"
+            if ($pkg.Name.Display.'#cdata-section') {
+                $pkgName = $pkg.Name.Display.'#cdata-section'
+            }
+            
+            $downloadJobs += @{
+                Url = $downloadPath
+                Destination = $fileName
+                Hash = $expectedHash
+                Model = $matchedModel
+                OS = $osDisplay
+                Name = $pkgName
+            }
+        }
+        
+        Write-Host "-------------------------------------------" -ForegroundColor DarkGray
+    }
+    
+    Write-Host ""
+    Write-Separator "-"
+    Write-Host ""
+    Write-Host "  DOWNLOAD SUMMARY" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "  New/Updated Packs : " -NoNewline -ForegroundColor Gray
+    Write-Host $downloadJobs.Count -ForegroundColor Green
+    Write-Host "  Up-to-date Packs  : " -NoNewline -ForegroundColor Gray
+    Write-Host $skippedCount -ForegroundColor Cyan
+    Write-Host ""
+    Write-Separator "-"
+    Write-Host ""
+    
+    if ($downloadJobs.Count -gt 0) {
+        Start-ParallelDownload -DownloadJobs $downloadJobs -Database $database
+        Save-Database -Database $database
+    } else {
+        Write-ColorOutput "No downloads needed. All driver packs are up to date!" "Success"
+    }
+    
+    Write-Host ""
+    Write-Separator "="
+    Write-Host ""
+    Write-Host "  [SUCCESS] Process completed successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Separator "="
+    Write-Host ""
+    pause
+}
+
+# Entry point
+try {
+    Get-Driver-Pack
+}
+catch {
+    $errorMsg = $_.Exception.Message
+    Write-ColorOutput "Fatal error: $errorMsg" "Error"
+    exit 1
+}
