@@ -15,19 +15,26 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     exit
 }
 
+# Add: Prevent window from closing immediately
+$host.UI.RawUI.WindowTitle = "Dell Driver Pack Installer"
+
 # Load config from files directory
-$FilesRoot = Join-Path $PSScriptRoot "files"
+$ScriptRoot = $PSScriptRoot
+$FilesRoot = Join-Path $ScriptRoot "files"
 $configPath = Join-Path $FilesRoot "config.psd1"
 
 if (!(Test-Path $configPath)) {
     Write-Host "Error: Config file not found at $configPath" -ForegroundColor Red
     Write-Host "Please run Download.ps1 first to create the configuration file." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Cyan
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
 $config = Import-PowerShellDataFile -Path $configPath
 
-$FilesRoot = $config.FilesRoot
+# Don't override FilesRoot from config - use the actual path
 $DcuFileName = $config.DcuFileName
 $DotNetFileName = $config.DotNetFileName
 
@@ -46,6 +53,9 @@ $StateFile = Join-Path $TempRoot "install_state.json"
 # Initialize
 if (!(Test-Path $FilesRoot)) {
     Write-Host "Error: Files directory not found. Please run Download.ps1 first." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Cyan
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
@@ -1029,30 +1039,97 @@ function Start-Installation {
     Write-Separator "-"
     Write-Host ""
     
-    # Find driver pack - check for multiple extensions
-    $packFolder = "$FilesRoot\$($systemInfo.OS.Replace(' ', '_'))\$($systemInfo.Model.Replace(' ', '_'))"
+    # Find driver pack - check for multiple extensions and model name variations
+    $osFolder = "$FilesRoot\$($systemInfo.OS.Replace(' ', '_'))"
     
     $hasDriverPack = $false
     $packPath = $null
+    $packFolder = $null
     
-    if (Test-Path $packFolder) {
+    # Function to find driver pack with fuzzy model matching
+    function Find-DriverPackFolder {
+        param(
+            [string]$BaseFolder,
+            [string]$ModelName
+        )
+        
+        if (!(Test-Path $BaseFolder)) {
+            return $null
+        }
+        
+        # Clean model name for folder comparison
+        $cleanModel = $ModelName.Replace(' ', '_')
+        
+        # Try exact match first
+        $exactPath = Join-Path $BaseFolder $cleanModel
+        if (Test-Path $exactPath) {
+            return $exactPath
+        }
+        
+        # Try partial match - find folders that contain parts of the model name
+        $modelParts = $ModelName -split '\s+' | Where-Object { $_.Length -gt 2 }
+        $folders = Get-ChildItem -Path $BaseFolder -Directory -ErrorAction SilentlyContinue
+        
+        foreach ($folder in $folders) {
+            $folderName = $folder.Name
+            
+            # Check if folder name matches any significant part of the model name
+            $matchScore = 0
+            foreach ($part in $modelParts) {
+                if ($folderName -like "*$part*") {
+                    $matchScore++
+                }
+            }
+            
+            # If we have a reasonable match (at least one part matches)
+            if ($matchScore -gt 0) {
+                Write-ColorOutput "Found potential match: $folderName (score: $matchScore)" "Info"
+                
+                # Check if this folder has a pack file
+                $testPack = Get-ChildItem -Path $folder.FullName -File | 
+                            Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
+                
+                if ($testPack) {
+                    return $folder.FullName
+                }
+            }
+        }
+        
+        return $null
+    }
+    
+    Write-ColorOutput "Searching for driver pack..." "Info"
+    $packFolder = Find-DriverPackFolder -BaseFolder $osFolder -ModelName $systemInfo.Model
+    
+    if ($packFolder) {
+        Write-ColorOutput "Driver pack folder found: $packFolder" "Success"
+        
         # Look for pack files with common extensions
-        $packFiles = Get-ChildItem -Path $packFolder -File | Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
+        $packFiles = Get-ChildItem -Path $packFolder -File | 
+                     Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
         
         if ($packFiles) {
             $packPath = $packFiles[0].FullName
             $hasDriverPack = $true
             Write-ColorOutput "Driver pack found: $packPath" "Success"
+            
+            # Check for model info metadata
+            $metadataFile = Join-Path $packFolder "model_info.txt"
+            if (Test-Path $metadataFile) {
+                Write-ColorOutput "Model metadata found" "Info"
+                $metadata = Get-Content $metadataFile -Raw
+                if ($metadata -match "CatalogModelName=(.+)") {
+                    Write-Host "  Catalog Model: $($matches[1])" -ForegroundColor Gray
+                }
+            }
         } else {
-            Write-ColorOutput "Driver pack not found for this system" "Warning"
-            Write-Host ""
-            Write-Host "  Expected folder: $packFolder" -ForegroundColor Gray
-            Write-Host "  Expected file: pack.cab or pack.exe" -ForegroundColor Gray
-            Write-Host ""
-            Write-ColorOutput "Will use online installation mode" "Info"
+            Write-ColorOutput "Pack file not found in folder" "Warning"
         }
     } else {
-        Write-ColorOutput "Driver pack folder not found: $packFolder" "Warning"
+        Write-ColorOutput "Driver pack not found for this system" "Warning"
+        Write-Host ""
+        Write-Host "  System Model  : $($systemInfo.Model)" -ForegroundColor Gray
+        Write-Host "  Expected in   : $osFolder" -ForegroundColor Gray
         Write-Host ""
         Write-ColorOutput "Will use online installation mode" "Info"
     }
@@ -1180,7 +1257,7 @@ catch {
     $errorMsg = $_.Exception.Message
     Write-ColorOutput "Fatal error: $errorMsg" "Error"
     Write-Host ""
-    Write-Host "Press any key to exit..."
+    Write-Host "Press any key to exit..." -ForegroundColor Cyan
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
@@ -1203,4 +1280,9 @@ finally {
             Write-Log "Failed to cleanup temp files: $_"
         }
     }
+    
+    # Add: Final pause before closing
+    Write-Host ""
+    Write-Host "Script execution completed. Press any key to exit..." -ForegroundColor Green
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }

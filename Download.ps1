@@ -8,6 +8,9 @@
 
 #Requires -Version 5.1
 
+# Add: Prevent window from closing immediately
+$host.UI.RawUI.WindowTitle = "Dell Driver Pack Downloader"
+
 # Initialize files directory first
 $FilesRoot = Join-Path $PSScriptRoot "files"
 if (!(Test-Path $FilesRoot)) { 
@@ -82,6 +85,8 @@ if (!(Test-Path $configPath)) {
     
     Write-Host "After updating the config file, run this script again." -ForegroundColor Yellow
     Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Cyan
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 0
 }
 
@@ -260,7 +265,11 @@ function Get-Catalog {
         
         $sevenZip = "C:\Program Files\7-Zip\7z.exe"
         if (!(Test-Path $sevenZip)) {
-            throw "7-Zip not found at $sevenZip"
+            $sevenZip = "C:\Program Files (x86)\7-Zip\7z.exe"
+        }
+        
+        if (!(Test-Path $sevenZip)) {
+            throw "7-Zip not found. Please install 7-Zip from https://www.7-zip.org/"
         }
         
         & $sevenZip x "$CatalogCABFile" -o"$extractFolder" -y | Out-Null
@@ -502,11 +511,24 @@ function Get-Driver-Pack {
         
         $models = $models | Select-Object -Unique
         
+        # Enhanced matching: support both exact match and partial match
         $matchedModel = $null
+        $catalogModel = $null
+        
         foreach ($model in $models) {
             foreach ($targetModel in $TargetModels) {
+                # Try exact match first
                 if ($model -ieq $targetModel) {
-                    $matchedModel = $model
+                    $matchedModel = $targetModel
+                    $catalogModel = $model
+                    break
+                }
+                # Try partial match: check if catalog model is contained in target model
+                # or if target model is contained in catalog model
+                elseif ($targetModel -like "*$model*" -or $model -like "*$targetModel*") {
+                    $matchedModel = $targetModel
+                    $catalogModel = $model
+                    Write-ColorOutput "  Partial match: '$targetModel' matches catalog entry '$model'" "Info"
                     break
                 }
             }
@@ -517,6 +539,9 @@ function Get-Driver-Pack {
         
         Write-Host ""
         Write-Host ">> Model: $matchedModel" -ForegroundColor White
+        if ($catalogModel -and $catalogModel -ne $matchedModel) {
+            Write-Host "   Catalog Model: $catalogModel" -ForegroundColor Gray
+        }
         
         $supportedOSList = $pkg.SupportedOperatingSystems.OperatingSystem
         if (-not $supportedOSList) { 
@@ -577,6 +602,34 @@ function Get-Driver-Pack {
             # Use "pack" as base name but keep the original extension
             $fileName = Join-Path $destFolder "pack$fileExtension"
             
+            # Get package name before creating metadata
+            $pkgName = "Driver Pack"
+            if ($pkg.Name.Display.'#cdata-section') {
+                $pkgName = $pkg.Name.Display.'#cdata-section'
+            } elseif ($pkg.Name.Display.'#text') {
+                $pkgName = $pkg.Name.Display.'#text'
+            } elseif ($pkg.Name.Display -is [string]) {
+                $pkgName = $pkg.Name.Display
+            }
+            
+            # Get version if available
+            $pkgVersion = "N/A"
+            if ($pkg.version) {
+                $pkgVersion = $pkg.version
+            }
+            
+            # Create a metadata file to help Install.ps1 with model mapping
+            $metadataFile = Join-Path $destFolder "model_info.txt"
+            $metadataContent = @"
+FullModelName=$matchedModel
+CatalogModelName=$catalogModel
+DriverPackageName=$pkgName
+DriverPackageFile=$originalFileName
+DriverVersion=$pkgVersion
+DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+"@
+            Set-Content -Path $metadataFile -Value $metadataContent -Force
+
             $expectedHash = $null
             if ($pkg.hashMD5) {
                 $expectedHash = $pkg.hashMD5
@@ -594,10 +647,6 @@ function Get-Driver-Pack {
             }
             
             Write-ColorOutput "   [QUEUE] Added to download queue (${originalFileName})" "Info"
-            $pkgName = "Driver Pack"
-            if ($pkg.Name.Display.'#cdata-section') {
-                $pkgName = $pkg.Name.Display.'#cdata-section'
-            }
             
             $downloadJobs += @{
                 Url = $downloadPath
@@ -639,7 +688,9 @@ function Get-Driver-Pack {
     Write-Host ""
     Write-Separator "="
     Write-Host ""
-    pause
+    Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Green
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
 
 # Entry point
@@ -649,5 +700,8 @@ try {
 catch {
     $errorMsg = $_.Exception.Message
     Write-ColorOutput "Fatal error: $errorMsg" "Error"
+    Write-Host ""
+    Write-Host "Press any key to exit..." -ForegroundColor Cyan
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
