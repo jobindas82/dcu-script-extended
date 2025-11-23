@@ -11,6 +11,16 @@
 # Add: Prevent window from closing immediately
 $host.UI.RawUI.WindowTitle = "Dell Driver Pack Downloader"
 
+# Change console colors - set background to black
+try {
+    $host.UI.RawUI.BackgroundColor = "Black"
+    $host.UI.RawUI.ForegroundColor = "White"
+    Clear-Host
+}
+catch {
+    # Silently continue if color change fails
+}
+
 # Initialize files directory first
 $FilesRoot = Join-Path $PSScriptRoot "files"
 if (!(Test-Path $FilesRoot)) { 
@@ -47,7 +57,9 @@ if (!(Test-Path $configPath)) {
     CatalogXMLFile = ".\files\catalog\DriverPackCatalog.xml"
     
     DcuUrl         = "https://dl.dell.com/FOLDER13309338M/3/Dell-Command-Update-Application_Y5VJV_WIN64_5.5.0_A00_02.EXE"
-    DcuFileName    = "Dell-Command-Update-Setup.exe"
+    DcuUrl54       = "https://dl.dell.com/FOLDER12208864M/1/Dell-Command-Update-Windows-Universal-Application_R284X_WIN_5.4.1_A00.EXE"
+    DcuFileName    = "Dell-Command-Update_55.exe"
+    DcuFileName54  = "Dell-Command-Update_54.exe"
     
     DotNetUrl      = "https://download.visualstudio.microsoft.com/download/pr/907765b0-2bf8-494e-93aa-5ef9553c5d68/a9308dc010617e6716c0e6abd53b05ce/windowsdesktop-runtime-8.0.11-win-x64.exe"
     DotNetFileName = "windowsdesktop-runtime-8.0-win-x64.exe"
@@ -101,7 +113,9 @@ $CatalogXMLFile = $config.CatalogXMLFile
 $TargetModels = $config.TargetModels
 $TargetOS = $config.TargetOS
 $DcuUrl = $config.DcuUrl
+$DcuUrl54 = $config.DcuUrl54
 $DcuFileName = $config.DcuFileName
+$DcuFileName54 = $config.DcuFileName54
 $DotNetUrl = $config.DotNetUrl
 $DotNetFileName = $config.DotNetFileName
 
@@ -444,9 +458,15 @@ function Download-Prerequisite {
 function Download-Prerequisites {
     Write-Header "CHECKING PREREQUISITES"
     
-    # Download Dell Command Update
+    # Download Dell Command Update 5.5
     $dcuPath = Join-Path $FilesRoot "dcu\$DcuFileName"
-    Download-Prerequisite -Url $DcuUrl -Destination $dcuPath -Name "Dell Command Update"
+    Download-Prerequisite -Url $DcuUrl -Destination $dcuPath -Name "Dell Command Update 5.5"
+    
+    Write-Host ""
+    
+    # Download Dell Command Update 5.4
+    $dcuPath54 = Join-Path $FilesRoot "dcu\$DcuFileName54"
+    Download-Prerequisite -Url $DcuUrl54 -Destination $dcuPath54 -Name "Dell Command Update 5.4"
     
     Write-Host ""
     
@@ -688,8 +708,24 @@ DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     Write-Host ""
     Write-Separator "="
     Write-Host ""
+    
+    # Show completion summary
     Write-Host ""
-    Write-Host "Press any key to exit..." -ForegroundColor Green
+    Write-Host "  NEXT STEPS:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  1. Review the downloaded driver packs in: $FilesRoot" -ForegroundColor White
+    Write-Host "  2. Run Install.ps1 to install drivers on target systems" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Downloaded files location:" -ForegroundColor Gray
+    Write-Host "  - Driver Packs: $FilesRoot\Windows_*_x64\" -ForegroundColor Gray
+    Write-Host "  - DCU 5.5:      $FilesRoot\dcu\$DcuFileName" -ForegroundColor Gray
+    Write-Host "  - DCU 5.4:      $FilesRoot\dcu\$DcuFileName54" -ForegroundColor Gray
+    Write-Host "  - .NET Runtime: $FilesRoot\dotnet\$DotNetFileName" -ForegroundColor Gray
+    Write-Host ""
+    Write-Separator "-"
+    Write-Host ""
+    Write-Host "Download process completed. You may now close this window." -ForegroundColor Green
+    Write-Host "Press any key to exit..." -ForegroundColor Cyan
     $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
 }
 

@@ -18,6 +18,16 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 # Add: Prevent window from closing immediately
 $host.UI.RawUI.WindowTitle = "Dell Driver Pack Installer"
 
+# Change console colors - set background to black
+try {
+    $host.UI.RawUI.BackgroundColor = "Black"
+    $host.UI.RawUI.ForegroundColor = "White"
+    Clear-Host
+}
+catch {
+    # Silently continue if color change fails
+}
+
 # Load config from files directory
 $ScriptRoot = $PSScriptRoot
 $FilesRoot = Join-Path $ScriptRoot "files"
@@ -62,6 +72,58 @@ if (!(Test-Path $FilesRoot)) {
 # ============================
 # UI Helper Functions
 # ============================
+
+function Select-DcuVersion {
+    Write-Host ""
+    Write-Host "===============================================================================" -ForegroundColor Cyan
+    Write-Host "                         SELECT DCU VERSION                                    " -ForegroundColor Cyan
+    Write-Host "===============================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Please select the Dell Command | Update version to install:" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "    [1] DCU 5.4" -ForegroundColor Cyan
+    Write-Host "    [2] DCU 5.5 (Recommended)" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  Default: DCU 5.5 will be selected automatically in 5 seconds..." -ForegroundColor Gray
+    Write-Host ""
+    
+    $timeout = 5
+    $selectedVersion = $null
+    
+    for ($i = $timeout; $i -gt 0; $i--) {
+        if ([Console]::KeyAvailable) {
+            $key = [Console]::ReadKey($true)
+            if ($key.KeyChar -eq '1') {
+                $selectedVersion = "5.4"
+                break
+            }
+            elseif ($key.KeyChar -eq '2') {
+                $selectedVersion = "5.5"
+                break
+            }
+        }
+        
+        Write-Host "`r  Time remaining: $i seconds... " -NoNewline -ForegroundColor Yellow
+        Start-Sleep -Seconds 1
+    }
+    
+    if ($null -eq $selectedVersion) {
+        $selectedVersion = "5.5"
+        Write-Host "`r                                    " -NoNewline
+        Write-Host "`r  No selection made. Using default: DCU 5.5" -ForegroundColor Green
+    }
+    else {
+        Write-Host "`r                                    " -NoNewline
+        Write-Host "`r  Selected: DCU $selectedVersion" -ForegroundColor Green
+    }
+    
+    Write-Host ""
+    Write-Host "===============================================================================" -ForegroundColor Cyan
+    Write-Host ""
+    Start-Sleep -Seconds 1
+    
+    return $selectedVersion
+}
 
 function Write-ColorOutput {
     param(
@@ -441,13 +503,15 @@ function Install-DotNetRuntime {
 }
 
 function Install-DellCommandUpdate {
+    param([string]$PreferredVersion = "5.5")
+    
     Write-ColorOutput "Checking for Dell Command | Update..." "Header"
     Show-ProgressBar -Activity "DCU Installation" -Status "Checking installation..." -PercentComplete 10
     
     $dcuPath = Get-DcuPath
     
-    # Define minimum required version (adjust as needed)
-    $minimumVersion = [version]"5.0.0"
+    # Define minimum required version based on preference
+    $minimumVersion = if ($PreferredVersion -eq "5.4") { [version]"5.4.0" } else { [version]"5.5.0" }
     $needsReinstall = $false
     
     if ($dcuPath) {
@@ -460,12 +524,19 @@ function Install-DellCommandUpdate {
             Write-ColorOutput "Installed version: $installedVersion" "Info"
             Write-Log "DCU installed version: $installedVersion"
             
-            if ($installedVersion -lt $minimumVersion) {
+            # Check if installed version matches preferred version
+            $installedMajorMinor = "$($installedVersion.Major).$($installedVersion.Minor)"
+            
+            if ($installedMajorMinor -ne $PreferredVersion) {
+                Write-ColorOutput "Installed version ($installedMajorMinor) does not match preferred version ($PreferredVersion)" "Warning"
+                $needsReinstall = $true
+            }
+            elseif ($installedVersion -lt $minimumVersion) {
                 Write-ColorOutput "Installed version is outdated (minimum required: $minimumVersion)" "Warning"
                 $needsReinstall = $true
             }
             else {
-                Write-ColorOutput "Dell Command | Update version is up to date" "Success"
+                Write-ColorOutput "Dell Command | Update version $PreferredVersion is installed" "Success"
                 Show-ProgressBar -Activity "DCU Installation" -Status "Already installed" -PercentComplete 100
                 Start-Sleep -Milliseconds 500
                 Write-Progress -Activity "DCU Installation" -Completed
@@ -473,11 +544,8 @@ function Install-DellCommandUpdate {
             }
         }
         else {
-            Write-ColorOutput "Could not determine DCU version, assuming it's current" "Warning"
-            Show-ProgressBar -Activity "DCU Installation" -Status "Already installed" -PercentComplete 100
-            Start-Sleep -Milliseconds 500
-            Write-Progress -Activity "DCU Installation" -Completed
-            return $dcuPath
+            Write-ColorOutput "Could not determine DCU version, will reinstall with version $PreferredVersion" "Warning"
+            $needsReinstall = $true
         }
     }
     
@@ -493,15 +561,30 @@ function Install-DellCommandUpdate {
         Write-Host ""
     }
     
+    # Determine which installer to use based on preferred version
+    $dcuInstallerName = if ($PreferredVersion -eq "5.4") {
+        # Look for DCU 5.4 installer in config or use default name
+        if ($config.DcuFileName54) {
+            $config.DcuFileName54
+        }
+        else {
+            "Dell-Command-Update_54.exe"
+        }
+    }
+    else {
+        # Use DCU 5.5 (from config)
+        $DcuFileName
+    }
+    
     # Install new version
-    $setupPath = Join-Path $FilesRoot "dcu\$DcuFileName"
+    $setupPath = Join-Path $FilesRoot "dcu\$dcuInstallerName"
     if (!(Test-Path $setupPath)) {
-        Write-ColorOutput "DCU installer not found at $setupPath" "Error"
+        Write-ColorOutput "DCU $PreferredVersion installer not found at $setupPath" "Error"
         Write-ColorOutput "Please run Download.ps1 first" "Warning"
         throw "DCU installer not found"
     }
     
-    Write-ColorOutput "Installing Dell Command | Update..." "Info"
+    Write-ColorOutput "Installing Dell Command | Update $PreferredVersion..." "Info"
     Show-ProgressBar -Activity "DCU Installation" -Status "Running installer..." -PercentComplete 50
     
     try {
@@ -546,14 +629,11 @@ function Set-DcuConfiguration {
     
     try {
         # Enable Advanced Driver Restore
-        & $DcuPath /configure -advancedDriverRestore=enable | Out-Null
+        Write-Host ""
+        & $DcuPath /configure -advancedDriverRestore=enable
+        Write-Host ""
+        
         Write-ColorOutput "Advanced Driver Restore enabled" "Success"
-        
-        Show-ProgressBar -Activity "DCU Configuration" -Status "Configuring driver source..." -PercentComplete 60
-        
-        # Configure to download driver library from Dell support site
-        & $DcuPath /configure -downloadLibrary=enable | Out-Null
-        Write-ColorOutput "Driver library download from Dell enabled" "Success"
         
         Show-ProgressBar -Activity "DCU Configuration" -Status "Complete" -PercentComplete 100
         Start-Sleep -Milliseconds 500
@@ -580,7 +660,9 @@ function Set-OfflineDriverPack {
     Show-ProgressBar -Activity "Driver Pack Configuration" -Status "Setting driver library location..." -PercentComplete 50
     
     try {
-        & $DcuPath /configure -driverLibraryLocation="$PackPath" | Out-Null
+        Write-Host ""
+        & $DcuPath /configure -driverLibraryLocation="$PackPath"
+        Write-Host ""
         Write-ColorOutput "Offline driver pack configured: $PackPath" "Success"
         
         Show-ProgressBar -Activity "Driver Pack Configuration" -Status "Complete" -PercentComplete 100
@@ -763,7 +845,7 @@ function Install-DriversOffline {
     
     if (!(Test-Path $PackPath)) {
         Write-ColorOutput "Driver pack not found at: $PackPath" "Error"
-        return $false
+        throw "Driver pack is required for offline installation"
     }
     
     # Set state before starting
@@ -773,25 +855,10 @@ function Install-DriversOffline {
     Show-ProgressBar -Activity "Driver Installation" -Status "Configuring offline mode..." -PercentComplete 20
     
     try {
-        # Copy driver pack to temp location if it's on a read-only drive
-        $tempPackPath = Join-Path $TempRoot "driverpack_temp"
-        if (!(Test-Path $tempPackPath)) {
-            New-Item -ItemType Directory -Path $tempPackPath -Force | Out-Null
-        }
-        
-        $tempPackFile = Join-Path $tempPackPath (Split-Path $PackPath -Leaf)
-        
-        if ($PackPath -notlike "C:\*") {
-            Write-ColorOutput "Copying driver pack to temp location..." "Info"
-            Set-InstallationState -State "IN_PROGRESS" -Step "Offline Driver Installation" -Details "Copying driver pack"
-            Copy-Item $PackPath $tempPackFile -Force
-            $packToUse = $tempPackFile
-        } else {
-            $packToUse = $PackPath
-        }
-        
-        # Try to configure DCU for offline mode (suppress output)
-        $null = & $DcuPath /configure -driverLibraryLocation="$packToUse" 2>&1
+        # Configure DCU for offline mode using the original pack path directly
+        Write-Host ""
+        & $DcuPath /configure -driverLibraryLocation="$PackPath"
+        Write-Host ""
         
         Write-ColorOutput "Starting offline driver installation..." "Info"
         Write-ColorOutput "This may take several minutes. Please wait..." "Info"
@@ -802,25 +869,23 @@ function Install-DriversOffline {
         Set-InstallationState -State "IN_PROGRESS" -Step "Offline Driver Installation" -Details "Installing drivers via DCU (CRITICAL - DO NOT INTERRUPT)"
         
         Show-ProgressBar -Activity "Driver Installation" -Status "Installing drivers (this may take 10-20 minutes)..." -PercentComplete 30
-        
-        # Run DCU with output redirection to capture it
-        $dcuOutput = & $DcuPath /driverinstall 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-        
-        # You can optionally log the full output for debugging
-        Write-Log "DCU Output: $dcuOutput"
-        Write-Log "DCU Exit Code: $exitCode"
-        
-        # Cleanup temp files
-        if ($packToUse -eq $tempPackFile -and (Test-Path $tempPackFile)) {
-            Remove-Item $tempPackFile -Force -ErrorAction SilentlyContinue
-        }
-        
-        Show-ProgressBar -Activity "Driver Installation" -Status "Complete" -PercentComplete 100
-        Start-Sleep -Milliseconds 500
         Write-Progress -Activity "Driver Installation" -Completed
         
         Write-Host ""
+        Write-Separator "-"
+        Write-Host "  DCU DRIVER INSTALLATION OUTPUT" -ForegroundColor Cyan
+        Write-Separator "-"
+        Write-Host ""
+        
+        # Run DCU - show all output
+        & $DcuPath /driverinstall
+        $exitCode = $LASTEXITCODE
+        
+        Write-Host ""
+        Write-Separator "-"
+        Write-Host ""
+        
+        Write-Log "DCU Exit Code: $exitCode"
         
         # Check if installation was successful
         if ($exitCode -eq 0) {
@@ -836,7 +901,7 @@ function Install-DriversOffline {
         }
         else {
             Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Exit code: $exitCode"
-            Write-ColorOutput "Offline installation failed with exit code: $exitCode" "Warning"
+            Write-ColorOutput "Offline installation failed with exit code: $exitCode" "Error"
             return $false
         }
     }
@@ -848,138 +913,42 @@ function Install-DriversOffline {
     }
 }
 
-function Install-DriversWithLibrary {
+function Reset-DcuToOnlineMode {
     param([string]$DcuPath)
     
-    Write-ColorOutput "Attempting driver installation using Dell driver library..." "Header"
-    Write-Host ""
+    Write-Header "RECONFIGURING DCU FOR ONLINE UPDATES"
     
-    # Check internet connectivity
-    if (-not (Test-InternetConnection)) {
-        Write-ColorOutput "No internet connection - driver library download requires internet" "Warning"
-        return $null
-    }
-    
-    Set-InstallationState -State "IN_PROGRESS" -Step "Online Driver Library" -Details "Configuring Advanced Driver Restore"
-    
-    Write-ColorOutput "Internet connection available" "Success"
-    Write-ColorOutput "Configuring Advanced Driver Restore..." "Info"
-    Show-ProgressBar -Activity "Driver Library Download" -Status "Configuring..." -PercentComplete 20
+    Write-ColorOutput "Switching DCU to online mode for future updates..." "Info"
+    Show-ProgressBar -Activity "DCU Reconfiguration" -Status "Configuring online mode..." -PercentComplete 30
     
     try {
-        # Enable Advanced Driver Restore and download from Dell (suppress output)
-        $null = & $DcuPath /configure -advancedDriverRestore=enable 2>&1
-        $null = & $DcuPath /configure -downloadLibrary=enable 2>&1
-        
-        Write-ColorOutput "Downloading driver library from Dell..." "Info"
-        Write-ColorOutput "This may take several minutes depending on your internet speed..." "Info"
+        # Clear the driver library location to switch back to online mode
         Write-Host ""
-        Write-ColorOutput "WARNING: System may restart automatically or become unresponsive during installation" "Warning"
+        & $DcuPath /configure -driverLibraryLocation=""
         Write-Host ""
         
-        Set-InstallationState -State "IN_PROGRESS" -Step "Online Driver Library" -Details "Downloading and installing drivers (CRITICAL)"
+        Write-ColorOutput "Offline driver library location cleared" "Success"
         
-        Show-ProgressBar -Activity "Driver Library Download" -Status "Downloading and installing drivers..." -PercentComplete 30
+        Show-ProgressBar -Activity "DCU Reconfiguration" -Status "Enabling Dell online downloads..." -PercentComplete 60
         
-        # Use DCU to download the driver library (suppress output)
-        $dcuOutput = & $DcuPath /driverinstall 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
+        # Enable download from Dell
+        Write-Host ""
+        & $DcuPath /configure -downloadLibrary=enable
+        Write-Host ""
         
-        # Log for debugging
-        Write-Log "DCU Library Output: $dcuOutput"
-        Write-Log "DCU Library Exit Code: $exitCode"
+        Write-ColorOutput "Dell online driver library enabled" "Success"
         
-        Show-ProgressBar -Activity "Driver Library Download" -Status "Complete" -PercentComplete 100
+        Show-ProgressBar -Activity "DCU Reconfiguration" -Status "Complete" -PercentComplete 100
         Start-Sleep -Milliseconds 500
-        Write-Progress -Activity "Driver Library Download" -Completed
+        Write-Progress -Activity "DCU Reconfiguration" -Completed
         
         Write-Host ""
-        
-        if ($exitCode -eq 0) {
-            Set-InstallationState -State "COMPLETED" -Step "Online Driver Library" -Details "Success"
-            Write-ColorOutput "Driver installation with library completed successfully" "Success"
-            Write-ColorOutput "A system restart may be required" "Warning"
-            return $exitCode
-        }
-        elseif ($exitCode -eq 3010 -or $exitCode -eq 500) {
-            Set-InstallationState -State "COMPLETED" -Step "Online Driver Library" -Details "Success - Restart required"
-            Write-ColorOutput "Driver installation with library completed - restart required" "Warning"
-            return $exitCode
-        }
-        else {
-            Set-InstallationState -State "FAILED" -Step "Online Driver Library" -Details "Exit code: $exitCode"
-            Write-ColorOutput "Driver library installation completed with exit code: $exitCode" "Warning"
-            return $exitCode
-        }
+        Write-ColorOutput "DCU configured to use Dell online driver updates for future installations" "Success"
     }
     catch {
         $errorMsg = $_.Exception.Message
-        Set-InstallationState -State "FAILED" -Step "Online Driver Library" -Details "Exception: $errorMsg"
-        Write-ColorOutput "Driver library installation failed: $errorMsg" "Error"
-        return $null
-    }
-}
-
-function Install-DriversOnline {
-    param([string]$DcuPath)
-    
-    Write-ColorOutput "Attempting online driver installation..." "Header"
-    Write-Host ""
-    
-    # Check internet connectivity
-    if (-not (Test-InternetConnection)) {
-        Wait-ForInternet
-    }
-    
-    Set-InstallationState -State "IN_PROGRESS" -Step "Online Driver Installation" -Details "Starting online installation"
-    
-    Write-ColorOutput "Internet connection available" "Success"
-    Write-ColorOutput "Starting online driver installation..." "Info"
-    Write-ColorOutput "This may take several minutes. Please wait..." "Info"
-    Write-Host ""
-    Write-ColorOutput "WARNING: System may restart automatically or become unresponsive during installation" "Warning"
-    Write-Host ""
-    
-    Show-ProgressBar -Activity "Driver Installation" -Status "Downloading and installing drivers..." -PercentComplete 30
-    
-    try {
-        Set-InstallationState -State "IN_PROGRESS" -Step "Online Driver Installation" -Details "Installing drivers via DCU (CRITICAL)"
-        
-        # Run DCU with output suppression
-        $dcuOutput = & $DcuPath /driverinstall 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-        
-        # Log for debugging
-        Write-Log "DCU Online Output: $dcuOutput"
-        Write-Log "DCU Online Exit Code: $exitCode"
-        
-        Show-ProgressBar -Activity "Driver Installation" -Status "Complete" -PercentComplete 100
-        Start-Sleep -Milliseconds 500
-        Write-Progress -Activity "Driver Installation" -Completed
-        
-        Write-Host ""
-        
-        if ($exitCode -eq 0) {
-            Set-InstallationState -State "COMPLETED" -Step "Online Driver Installation" -Details "Success"
-            Write-ColorOutput "Online driver installation completed successfully" "Success"
-            Write-ColorOutput "A system restart may be required" "Warning"
-        }
-        elseif ($exitCode -eq 3010 -or $exitCode -eq 500) {
-            Set-InstallationState -State "COMPLETED" -Step "Online Driver Installation" -Details "Success - Restart required"
-            Write-ColorOutput "Online driver installation completed - restart required" "Warning"
-        }
-        else {
-            Set-InstallationState -State "FAILED" -Step "Online Driver Installation" -Details "Exit code: $exitCode"
-            Write-ColorOutput "Online installation completed with exit code: $exitCode" "Warning"
-        }
-        
-        return $exitCode
-    }
-    catch {
-        $errorMsg = $_.Exception.Message
-        Set-InstallationState -State "FAILED" -Step "Online Driver Installation" -Details "Exception: $errorMsg"
-        Write-ColorOutput "Online installation failed: $errorMsg" "Error"
-        throw
+        Write-ColorOutput "Failed to reconfigure DCU: $errorMsg" "Warning"
+        Write-ColorOutput "You may need to configure DCU manually for online updates" "Warning"
     }
 }
 
@@ -992,7 +961,7 @@ function Start-Installation {
     Write-Host ""
     Write-Host "===============================================================================" -ForegroundColor Cyan
     Write-Host "                                                                               " -ForegroundColor Cyan
-    Write-Host "           Dell Driver Pack Installer - Enhanced Edition                      " -ForegroundColor Cyan
+    Write-Host "           Dell Driver Pack Installer - Offline Edition                       " -ForegroundColor Cyan
     Write-Host "           Author: Jobin Das (jobindas82@gmail.com)                           " -ForegroundColor Cyan
     Write-Host "           GitHub: https://github.com/jobindas82                              " -ForegroundColor Cyan
     Write-Host "                                                                               " -ForegroundColor Cyan
@@ -1002,8 +971,12 @@ function Start-Installation {
     # Check for previous crash
     Test-PreviousCrash
     
+    # Select DCU version at the start
+    $dcuVersion = Select-DcuVersion
+    Write-Log "User selected DCU version: $dcuVersion"
+    
     # Initialize installation state
-    Set-InstallationState -State "IN_PROGRESS" -Step "Initialization" -Details "Starting installation"
+    Set-InstallationState -State "IN_PROGRESS" -Step "Initialization" -Details "Starting installation with DCU $dcuVersion"
     
     Write-Header "INSTALLING PREREQUISITES"
     
@@ -1035,6 +1008,8 @@ function Start-Installation {
     Write-Host $systemInfo.OS -ForegroundColor Green
     Write-Host "  Architecture : " -NoNewline -ForegroundColor Gray
     Write-Host $systemInfo.Architecture -ForegroundColor Green
+    Write-Host "  DCU Version  : " -NoNewline -ForegroundColor Gray
+    Write-Host $dcuVersion -ForegroundColor Green
     Write-Host ""
     Write-Separator "-"
     Write-Host ""
@@ -1125,21 +1100,25 @@ function Start-Installation {
         } else {
             Write-ColorOutput "Pack file not found in folder" "Warning"
         }
-    } else {
-        Write-ColorOutput "Driver pack not found for this system" "Warning"
+    }
+    
+    if (-not $hasDriverPack) {
+        Write-ColorOutput "Driver pack not found for this system" "Error"
         Write-Host ""
         Write-Host "  System Model  : $($systemInfo.Model)" -ForegroundColor Gray
         Write-Host "  Expected in   : $osFolder" -ForegroundColor Gray
         Write-Host ""
-        Write-ColorOutput "Will use online installation mode" "Info"
+        Write-ColorOutput "Offline installation requires a driver pack" "Error"
+        Write-ColorOutput "Please run Download.ps1 to download the driver pack first" "Warning"
+        throw "Driver pack not found"
     }
     
     Write-Host ""
     
     Write-Header "INSTALLING DELL COMMAND UPDATE"
     
-    # Install DCU
-    $dcuPath = Install-DellCommandUpdate
+    # Install DCU with selected version
+    $dcuPath = Install-DellCommandUpdate -PreferredVersion $dcuVersion
     Write-Host ""
     
     Write-Header "CONFIGURING DELL COMMAND UPDATE"
@@ -1150,73 +1129,21 @@ function Start-Installation {
     
     Write-Header "INSTALLING DRIVERS"
     
-    $exitCode = 0
+    # Offline installation only
+    Write-ColorOutput "Starting offline driver installation" "Info"
+    Write-Host ""
     
-    # Try offline installation first if driver pack is available
-    if ($hasDriverPack) {
-        Write-ColorOutput "Driver pack available - trying offline installation first" "Info"
-        Write-Host ""
-        
-        $offlineSuccess = Install-DriversOffline -DcuPath $dcuPath -PackPath $packPath
-        
-        if ($offlineSuccess) {
-            $exitCode = 0
-        }
-        else {
-            Write-Host ""
-            Write-Separator "-"
-            Write-Host ""
-            Write-ColorOutput "Offline installation failed" "Warning"
-            Write-ColorOutput "Trying Advanced Driver Restore with Dell driver library..." "Info"
-            Write-Host ""
-            Write-Separator "-"
-            Write-Host ""
-            Start-Sleep -Seconds 2
-            
-            # Try downloading driver library from Dell
-            $libraryExitCode = Install-DriversWithLibrary -DcuPath $dcuPath
-            
-            if ($libraryExitCode -ne $null) {
-                $exitCode = $libraryExitCode
-            }
-            else {
-                Write-Host ""
-                Write-Separator "-"
-                Write-Host ""
-                Write-ColorOutput "Driver library download failed - falling back to online mode" "Warning"
-                Write-Host ""
-                Write-Separator "-"
-                Write-Host ""
-                Start-Sleep -Seconds 2
-                
-                $exitCode = Install-DriversOnline -DcuPath $dcuPath
-            }
-        }
+    $offlineSuccess = Install-DriversOffline -DcuPath $dcuPath -PackPath $packPath
+    
+    if (-not $offlineSuccess) {
+        Write-ColorOutput "Offline installation failed" "Error"
+        throw "Driver installation failed"
     }
-    else {
-        # No driver pack available, try driver library download first
-        Write-ColorOutput "No driver pack available" "Warning"
-        Write-ColorOutput "Trying Advanced Driver Restore with Dell driver library..." "Info"
-        Write-Host ""
-        
-        $libraryExitCode = Install-DriversWithLibrary -DcuPath $dcuPath
-        
-        if ($libraryExitCode -ne $null) {
-            $exitCode = $libraryExitCode
-        }
-        else {
-            Write-Host ""
-            Write-Separator "-"
-            Write-Host ""
-            Write-ColorOutput "Driver library download failed - falling back to online mode" "Warning"
-            Write-Host ""
-            Write-Separator "-"
-            Write-Host ""
-            Start-Sleep -Seconds 2
-            
-            $exitCode = Install-DriversOnline -DcuPath $dcuPath
-        }
-    }
+    
+    Write-Host ""
+    
+    # Reconfigure DCU to use online mode after successful offline installation
+    Reset-DcuToOnlineMode -DcuPath $dcuPath
     
     Write-Host ""
     Write-Separator "="
@@ -1229,22 +1156,18 @@ function Start-Installation {
     # Clear state on successful completion
     Set-InstallationState -State "COMPLETED" -Step "Installation" -Details "All steps completed successfully"
     
-    # Prompt for restart if needed
-    if ($exitCode -eq 500 -or $exitCode -eq 0 -or $exitCode -eq 3010) {
-        Write-Host ""
-        $response = Read-Host "  Do you want to restart the computer now? (Y/N)"
-        if ($response -eq 'Y' -or $response -eq 'y') {
-            Write-ColorOutput "Restarting computer in 5 seconds..." "Info"
-            Clear-InstallationState
-            Start-Sleep -Seconds 5
-            Restart-Computer -Force
-        } else {
-            Write-Host ""
-            Write-ColorOutput "Please restart your computer to complete the installation" "Warning"
-            Write-Host ""
-            Clear-InstallationState
-        }
+    # Prompt for restart
+    Write-Host ""
+    $response = Read-Host "  Do you want to restart the computer now? (Y/N)"
+    if ($response -eq 'Y' -or $response -eq 'y') {
+        Write-ColorOutput "Restarting computer in 5 seconds..." "Info"
+        Clear-InstallationState
+        Start-Sleep -Seconds 5
+        Restart-Computer -Force
     } else {
+        Write-Host ""
+        Write-ColorOutput "Please restart your computer to complete the installation" "Warning"
+        Write-Host ""
         Clear-InstallationState
     }
 }
@@ -1269,11 +1192,6 @@ finally {
             $extractPath = Join-Path $TempRoot "extracted"
             if (Test-Path $extractPath) {
                 Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            
-            $tempPackPath = Join-Path $TempRoot "driverpack_temp"
-            if (Test-Path $tempPackPath) {
-                Remove-Item $tempPackPath -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
         catch {

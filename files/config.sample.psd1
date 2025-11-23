@@ -20,7 +20,7 @@
     
     # .NET Desktop Runtime 8.0 LTS - Latest version URL
     # Check for updates at: https://dotnet.microsoft.com/download/dotnet/8.0
-    DotNetUrl      = "https://download.visualstudio.microsoft.com/download/pr/907765b0-2bf8-494e-93aa-5ef9553c5d68/a9308dc010617e6716c0e6abd53b05ce/windowsdesktop-runtime-8.0.11-win-x64.exe"
+    DotNetUrl      = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/8.0.22/windowsdesktop-runtime-8.0.22-win-x64.exe"
     DotNetFileName = "windowsdesktop-runtime-8.0-win-x64.exe"
 
     # ============================
