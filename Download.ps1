@@ -58,13 +58,22 @@ if (!(Test-Path $configPath)) {
     
     DcuUrl         = "https://dl.dell.com/FOLDER13309338M/3/Dell-Command-Update-Application_Y5VJV_WIN64_5.5.0_A00_02.EXE"
     DcuUrl54       = "https://dl.dell.com/FOLDER12208864M/1/Dell-Command-Update-Windows-Universal-Application_R284X_WIN_5.4.1_A00.EXE"
+    DcuUrl56       = "https://dl.dell.com/FOLDER13922605M/1/Dell-Command-Update-Application_5CR1Y_WIN64_5.6.0_A00.EXE"
     DcuFileName    = "Dell-Command-Update_55.exe"
     DcuFileName54  = "Dell-Command-Update_54.exe"
+    DcuFileName56  = "Dell-Command-Update_56.exe"
     
     DotNetUrl      = "https://download.visualstudio.microsoft.com/download/pr/907765b0-2bf8-494e-93aa-5ef9553c5d68/a9308dc010617e6716c0e6abd53b05ce/windowsdesktop-runtime-8.0.11-win-x64.exe"
     DotNetFileName = "windowsdesktop-runtime-8.0-win-x64.exe"
 
     TargetModels   = @(
+        "Dell Pro 14 Plus PB14250"
+        "Dell Pro Max 16 Premium MA16250"
+        "Dell Pro Max Slim FCS1250"
+        "Latitude 5430"
+        "Precision 3660 Tower"
+        "Precision 5680"
+        "Precision 5690"
         "Latitude 5440"
     )
 
@@ -114,15 +123,17 @@ $TargetModels = $config.TargetModels
 $TargetOS = $config.TargetOS
 $DcuUrl = $config.DcuUrl
 $DcuUrl54 = $config.DcuUrl54
+$DcuUrl56 = $config.DcuUrl56
 $DcuFileName = $config.DcuFileName
 $DcuFileName54 = $config.DcuFileName54
+$DcuFileName56 = $config.DcuFileName56
 $DotNetUrl = $config.DotNetUrl
 $DotNetFileName = $config.DotNetFileName
 
 # Paths
 $LogFile = Join-Path $FilesRoot "Download.log"
 $DatabaseFile = Join-Path $FilesRoot "DriverPackDB.xml"
-$MaxParallelDownloads = 3
+$MaxParallelDownloads = 2
 
 # Initialize
 if (!(Test-Path $FilesRoot)) { New-Item -ItemType Directory -Path $FilesRoot -Force | Out-Null }
@@ -470,6 +481,12 @@ function Download-Prerequisites {
     
     Write-Host ""
     
+    # Download Dell Command Update 5.6
+    $dcuPath56 = Join-Path $FilesRoot "dcu\$DcuFileName56"
+    Download-Prerequisite -Url $DcuUrl56 -Destination $dcuPath56 -Name "Dell Command Update 5.6"
+    
+    Write-Host ""
+    
     # Download .NET Desktop Runtime
     $dotNetPath = Join-Path $FilesRoot "dotnet\$DotNetFileName"
     Download-Prerequisite -Url $DotNetUrl -Destination $dotNetPath -Name ".NET Desktop Runtime"
@@ -718,6 +735,7 @@ DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     Write-Host ""
     Write-Host "  Downloaded files location:" -ForegroundColor Gray
     Write-Host "  - Driver Packs: $FilesRoot\Windows_*_x64\" -ForegroundColor Gray
+    Write-Host "  - DCU 5.6:      $FilesRoot\dcu\$DcuFileName56" -ForegroundColor Gray
     Write-Host "  - DCU 5.5:      $FilesRoot\dcu\$DcuFileName" -ForegroundColor Gray
     Write-Host "  - DCU 5.4:      $FilesRoot\dcu\$DcuFileName54" -ForegroundColor Gray
     Write-Host "  - .NET Runtime: $FilesRoot\dotnet\$DotNetFileName" -ForegroundColor Gray

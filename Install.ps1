@@ -33,6 +33,26 @@ $ScriptRoot = $PSScriptRoot
 $FilesRoot = Join-Path $ScriptRoot "files"
 $configPath = Join-Path $FilesRoot "config.psd1"
 
+# Check if running from read-only media and warn user
+$isReadOnly = $false
+try {
+    $testFile = Join-Path $ScriptRoot "write_test_$(Get-Random).tmp"
+    [System.IO.File]::WriteAllText($testFile, "test")
+    Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+}
+catch {
+    $isReadOnly = $true
+    Write-Host ""
+    Write-Host "===============================================================================" -ForegroundColor Yellow
+    Write-Host "                          READ-ONLY MEDIA DETECTED                             " -ForegroundColor Yellow
+    Write-Host "===============================================================================" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Running from read-only media (CD/DVD/USB)" -ForegroundColor Cyan
+    Write-Host "  All logs and temp files will be stored in: C:\Temp\DellDriverInstaller" -ForegroundColor Cyan
+    Write-Host ""
+    Start-Sleep -Seconds 2
+}
+
 if (!(Test-Path $configPath)) {
     Write-Host "Error: Config file not found at $configPath" -ForegroundColor Red
     Write-Host "Please run Download.ps1 first to create the configuration file." -ForegroundColor Yellow
@@ -44,21 +64,24 @@ if (!(Test-Path $configPath)) {
 
 $config = Import-PowerShellDataFile -Path $configPath
 
-# Don't override FilesRoot from config - use the actual path
+# Don't override FilesRoot from config - use the actual path (read-only is OK for reading)
 $DcuFileName = $config.DcuFileName
 $DotNetFileName = $config.DotNetFileName
 
-# Add: Define temp directory on C: drive
+# ALWAYS use C:\Temp for all write operations
 $TempRoot = "C:\Temp\DellDriverInstaller"
 if (!(Test-Path $TempRoot)) {
     New-Item -ItemType Directory -Path $TempRoot -Force | Out-Null
 }
 
-# Move log file to temp directory
+# All writable files go to temp directory
 $LogFile = Join-Path $TempRoot "Install.log"
-
-# Add: State file to track installation status
 $StateFile = Join-Path $TempRoot "install_state.json"
+
+# Log that we're using temp directory
+Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`tScript started from: $ScriptRoot" -ErrorAction SilentlyContinue
+Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`tRead-only media: $isReadOnly" -ErrorAction SilentlyContinue
+Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`tTemp directory: $TempRoot" -ErrorAction SilentlyContinue
 
 # Initialize
 if (!(Test-Path $FilesRoot)) {
@@ -82,9 +105,10 @@ function Select-DcuVersion {
     Write-Host "  Please select the Dell Command | Update version to install:" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "    [1] DCU 5.4" -ForegroundColor Cyan
-    Write-Host "    [2] DCU 5.5 (Recommended)" -ForegroundColor Green
+    Write-Host "    [2] DCU 5.5" -ForegroundColor Cyan
+    Write-Host "    [3] DCU 5.6 (Recommended)" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  Default: DCU 5.5 will be selected automatically in 5 seconds..." -ForegroundColor Gray
+    Write-Host "  Default: DCU 5.6 will be selected automatically in 5 seconds..." -ForegroundColor Gray
     Write-Host ""
     
     $timeout = 5
@@ -101,6 +125,10 @@ function Select-DcuVersion {
                 $selectedVersion = "5.5"
                 break
             }
+            elseif ($key.KeyChar -eq '3') {
+                $selectedVersion = "5.6"
+                break
+            }
         }
         
         Write-Host "`r  Time remaining: $i seconds... " -NoNewline -ForegroundColor Yellow
@@ -108,9 +136,9 @@ function Select-DcuVersion {
     }
     
     if ($null -eq $selectedVersion) {
-        $selectedVersion = "5.5"
+        $selectedVersion = "5.6"
         Write-Host "`r                                    " -NoNewline
-        Write-Host "`r  No selection made. Using default: DCU 5.5" -ForegroundColor Green
+        Write-Host "`r  No selection made. Using default: DCU 5.6" -ForegroundColor Green
     }
     else {
         Write-Host "`r                                    " -NoNewline
@@ -503,7 +531,7 @@ function Install-DotNetRuntime {
 }
 
 function Install-DellCommandUpdate {
-    param([string]$PreferredVersion = "5.5")
+    param([string]$PreferredVersion = "5.6")
     
     Write-ColorOutput "Checking for Dell Command | Update..." "Header"
     Show-ProgressBar -Activity "DCU Installation" -Status "Checking installation..." -PercentComplete 10
@@ -511,7 +539,13 @@ function Install-DellCommandUpdate {
     $dcuPath = Get-DcuPath
     
     # Define minimum required version based on preference
-    $minimumVersion = if ($PreferredVersion -eq "5.4") { [version]"5.4.0" } else { [version]"5.5.0" }
+    $minimumVersion = if ($PreferredVersion -eq "5.4") { 
+        [version]"5.4.0" 
+    } elseif ($PreferredVersion -eq "5.5") { 
+        [version]"5.5.0" 
+    } else { 
+        [version]"5.6.0" 
+    }
     $needsReinstall = $false
     
     if ($dcuPath) {
@@ -569,6 +603,15 @@ function Install-DellCommandUpdate {
         }
         else {
             "Dell-Command-Update_54.exe"
+        }
+    }
+    elseif ($PreferredVersion -eq "5.6") {
+        # Use DCU 5.6
+        if ($config.DcuFileName56) {
+            $config.DcuFileName56
+        }
+        else {
+            "Dell-Command-Update_56.exe"
         }
     }
     else {
@@ -952,6 +995,73 @@ function Reset-DcuToOnlineMode {
     }
 }
 
+function Invoke-CustomConfiguration {
+    Write-Header "APPLYING CUSTOM CONFIGURATION"
+    
+    Write-ColorOutput "Running custom configuration tasks..." "Info"
+    Write-Host ""
+    
+    try {
+        # Get computer name
+        $computerName = $env:COMPUTERNAME
+        Write-ColorOutput "Computer Name: $computerName" "Info"
+        
+        # Extract location prefix (first 2 characters)
+        if ($computerName.Length -ge 2) {
+            $locationPrefix = $computerName.Substring(0, 2).ToUpper()
+            Write-ColorOutput "Location Prefix: $locationPrefix" "Info"
+            
+            # Map location prefix to timezone
+            $timezoneMap = @{
+                'CA' = 'Mountain Standard Time'      # Calgary
+                'VA' = 'Pacific Standard Time'       # Vancouver
+            }
+            
+            if ($timezoneMap.ContainsKey($locationPrefix)) {
+                $targetTimezone = $timezoneMap[$locationPrefix]
+                Write-ColorOutput "Target Timezone: $targetTimezone" "Info"
+                
+                # Get current timezone
+                $currentTimezone = (Get-TimeZone).Id
+                Write-ColorOutput "Current Timezone: $currentTimezone" "Info"
+                
+                if ($currentTimezone -ne $targetTimezone) {
+                    Write-ColorOutput "Setting timezone to $targetTimezone..." "Info"
+                    
+                    try {
+                        Set-TimeZone -Id $targetTimezone -ErrorAction Stop
+                        Write-ColorOutput "Timezone changed successfully to $targetTimezone" "Success"
+                        Write-Log "Timezone changed from $currentTimezone to $targetTimezone"
+                    }
+                    catch {
+                        Write-ColorOutput "Failed to set timezone: $($_.Exception.Message)" "Error"
+                        Write-Log "Timezone change failed: $($_.Exception.Message)"
+                    }
+                }
+                else {
+                    Write-ColorOutput "Timezone already set to $targetTimezone" "Success"
+                }
+            }
+            else {
+                Write-ColorOutput "No timezone mapping found for location prefix: $locationPrefix" "Warning"
+                Write-ColorOutput "Skipping timezone configuration" "Info"
+            }
+        }
+        else {
+            Write-ColorOutput "Computer name too short to extract location prefix" "Warning"
+            Write-ColorOutput "Skipping timezone configuration" "Info"
+        }
+        
+        Write-Host ""
+        Write-ColorOutput "Custom configuration completed" "Success"
+    }
+    catch {
+        $errorMsg = $_.Exception.Message
+        Write-ColorOutput "Custom configuration failed: $errorMsg" "Error"
+        Write-Log "Custom configuration error: $errorMsg"
+    }
+}
+
 # ============================
 # Main Logic
 # ============================
@@ -1144,6 +1254,11 @@ function Start-Installation {
     
     # Reconfigure DCU to use online mode after successful offline installation
     Reset-DcuToOnlineMode -DcuPath $dcuPath
+    
+    Write-Host ""
+    
+    # Run custom configuration
+    Invoke-CustomConfiguration
     
     Write-Host ""
     Write-Separator "="

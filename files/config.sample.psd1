@@ -35,9 +35,14 @@
     #   - "OptiPlex 7090"
     #   - "XPS 13 9310"
     TargetModels   = @(
-        "Latitude 5440",
-        "Latitude 5430",
-        "Precision 3650 Tower"
+        "Dell Pro 14 Plus PB14250"
+        "Dell Pro Max 16 Premium MA16250"
+        "Dell Pro Max Slim FCS1250"
+        "Latitude 5430"
+        "Precision 3660 Tower"
+        "Precision 5680"
+        "Precision 5690"
+        "Latitude 5440"
         # Add more models here as needed
     )
 
