@@ -1,9 +1,9 @@
 # ============================
-# Dell Driver Pack Downloader - Enhanced Version
-# Features: Progress bars, Parallel downloads, Version tracking
+# Dell Driver Pack Downloader - Offline Edition
+# Features: Progress bars, Sequential downloads, Version tracking
 # Author: Jobin Das (jobindas82)
 # GitHub: https://github.com/jobindas82
-# Email: jobindas82@gmail.com
+# Email: hello@jobin-d.com
 # ============================
 
 #Requires -Version 5.1
@@ -44,7 +44,8 @@ if (!(Test-Path $configPath)) {
         Write-Host "Creating config.psd1 from sample..." -ForegroundColor Cyan
         Copy-Item $sampleConfigPath $configPath
         Write-Host "Config file created successfully!" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "Sample config file not found. Creating default config..." -ForegroundColor Cyan
         
         # Create default config
@@ -133,7 +134,7 @@ $DotNetFileName = $config.DotNetFileName
 # Paths
 $LogFile = Join-Path $FilesRoot "Download.log"
 $DatabaseFile = Join-Path $FilesRoot "DriverPackDB.xml"
-$MaxParallelDownloads = 2
+
 
 # Initialize
 if (!(Test-Path $FilesRoot)) { New-Item -ItemType Directory -Path $FilesRoot -Force | Out-Null }
@@ -149,19 +150,19 @@ function Write-ColorOutput {
     )
     
     $colors = @{
-        'Info' = 'Cyan'
+        'Info'    = 'Cyan'
         'Success' = 'Green'
         'Warning' = 'Yellow'
-        'Error' = 'Red'
-        'Header' = 'Magenta'
+        'Error'   = 'Red'
+        'Header'  = 'Magenta'
     }
     
     $prefix = switch ($Type) {
-        'Info'    { '[+]' }
+        'Info' { '[+]' }
         'Success' { '[OK]' }
         'Warning' { '[!]' }
-        'Error'   { '[X]' }
-        'Header'  { '[#]' }
+        'Error' { '[X]' }
+        'Header' { '[#]' }
     }
     
     Write-Host "$prefix $Message" -ForegroundColor $colors[$Type]
@@ -205,7 +206,7 @@ function Show-ProgressBar {
 function Initialize-Database {
     if (!(Test-Path $DatabaseFile)) {
         $db = @{
-            LastUpdate = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            LastUpdate  = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
             DriverPacks = @()
         }
         $db | Export-Clixml -Path $DatabaseFile
@@ -251,11 +252,11 @@ function Add-DriverPackToDB {
     }
     
     $Database.DriverPacks += @{
-        Model = $Model
-        OS = $OS
-        Version = $Version
-        Hash = $Hash
-        FilePath = $FilePath
+        Model      = $Model
+        OS         = $OS
+        Version    = $Version
+        Hash       = $Hash
+        FilePath   = $FilePath
         Downloaded = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     }
 }
@@ -315,7 +316,7 @@ function Get-Catalog {
     }
 }
 
-function Start-ParallelDownload {
+function Start-SequentialDownload {
     param(
         [array]$DownloadJobs,
         $Database
@@ -327,92 +328,97 @@ function Start-ParallelDownload {
         return
     }
     
-    Write-ColorOutput "Starting parallel download of $totalJobs driver pack(s)..." "Header"
+    Write-ColorOutput "Starting download of $totalJobs driver pack(s)..." "Header"
+    Write-Host ""
     
-    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $MaxParallelDownloads)
-    $runspacePool.Open()
-    $runspaces = @()
+    $successCount = 0
+    $failedCount = 0
+    $currentJob = 0
     
-    $scriptBlock = {
-        param($Url, $Destination, $ExpectedHash, $Model, $OS)
+    foreach ($job in $DownloadJobs) {
+        $currentJob++
         
-        $result = @{
-            Success = $false
-            Model = $Model
-            OS = $OS
-            FilePath = $Destination
-            Hash = $ExpectedHash
-            Error = $null
-        }
+        Write-Host ""
+        Write-Separator "-"
+        Write-Host "  Download $currentJob of $totalJobs" -ForegroundColor Cyan
+        Write-Separator "-"
+        Write-Host ""
+        Write-ColorOutput "Model: $($job.Model)" "Info"
+        Write-ColorOutput "OS: $($job.OS)" "Info"
+        Write-ColorOutput "Package: $($job.Name)" "Info"
+        Write-Host ""
+        
+        $percent = [math]::Round(($currentJob / $totalJobs) * 100)
+        Show-ProgressBar -Activity "Downloading Driver Packs" -Status "Downloading $($job.Model) ($currentJob of $totalJobs)" -PercentComplete $percent
         
         try {
+            # Download the file
             $webClient = New-Object System.Net.WebClient
             $webClient.Headers.Add("User-Agent", "Mozilla/5.0")
-            $webClient.DownloadFile($Url, $Destination)
             
-            if (Test-Path $Destination) {
-                # Use MD5 hash to match Dell's catalog
-                $hash = (Get-FileHash -Path $Destination -Algorithm MD5).Hash
-                if ($hash -eq $ExpectedHash) {
-                    $result.Success = $true
-                } else {
-                    $result.Error = "Hash mismatch (Expected: $ExpectedHash, Got: $hash)"
-                    Remove-Item $Destination -Force -ErrorAction SilentlyContinue
+            Write-ColorOutput "Downloading from: $($job.Url)" "Info"
+            Write-ColorOutput "Saving to: $($job.Destination)" "Info"
+            Write-Host ""
+            
+            $webClient.DownloadFile($job.Url, $job.Destination)
+            
+            if (Test-Path $job.Destination) {
+                # Verify hash
+                Write-ColorOutput "Verifying file integrity..." "Info"
+                $hash = (Get-FileHash -Path $job.Destination -Algorithm MD5).Hash
+                
+                if ($hash -eq $job.Hash) {
+                    $fileSize = (Get-Item $job.Destination).Length / 1MB
+                    Write-ColorOutput "Download successful! ($([math]::Round($fileSize, 2)) MB)" "Success"
+                    Write-ColorOutput "Hash verified: $hash" "Success"
+                    
+                    # Add to database
+                    Add-DriverPackToDB -Model $job.Model -OS $job.OS -Version "Latest" -Hash $job.Hash -FilePath $job.Destination -Database $Database
+                    $successCount++
                 }
-            } else {
-                $result.Error = "File not created"
+                else {
+                    Write-ColorOutput "Hash mismatch!" "Error"
+                    Write-ColorOutput "Expected: $($job.Hash)" "Error"
+                    Write-ColorOutput "Got: $hash" "Error"
+                    Remove-Item $job.Destination -Force -ErrorAction SilentlyContinue
+                    $failedCount++
+                }
+            }
+            else {
+                Write-ColorOutput "File not created after download" "Error"
+                $failedCount++
             }
         }
         catch {
-            $result.Error = $_.Exception.Message
+            Write-ColorOutput "Download failed: $($_.Exception.Message)" "Error"
+            if (Test-Path $job.Destination) {
+                Remove-Item $job.Destination -Force -ErrorAction SilentlyContinue
+            }
+            $failedCount++
         }
         
-        return $result
-    }
-    
-    foreach ($job in $DownloadJobs) {
-        $ps = [powershell]::Create().AddScript($scriptBlock).AddArgument($job.Url).AddArgument($job.Destination).AddArgument($job.Hash).AddArgument($job.Model).AddArgument($job.OS)
-        $ps.RunspacePool = $runspacePool
-        
-        $runspaces += @{
-            Pipe = $ps
-            Status = $ps.BeginInvoke()
-            Job = $job
-        }
-    }
-    
-    $completed = 0
-    while ($runspaces.Status.IsCompleted -contains $false) {
-        $completedNow = ($runspaces.Status.IsCompleted | Where-Object { $_ -eq $true }).Count
-        if ($completedNow -ne $completed) {
-            $completed = $completedNow
-            $percent = [math]::Round(($completed / $totalJobs) * 100)
-            Show-ProgressBar -Activity "Downloading Driver Packs" -Status "Downloaded $completed of $totalJobs" -PercentComplete $percent
-        }
+        # Small delay between downloads
         Start-Sleep -Milliseconds 500
     }
     
     Write-Progress -Activity "Downloading Driver Packs" -Completed
     
-    $successCount = 0
-    foreach ($runspace in $runspaces) {
-        $result = $runspace.Pipe.EndInvoke($runspace.Status)
-        $runspace.Pipe.Dispose()
-        
-        if ($result.Success) {
-            Write-ColorOutput "Downloaded: $($result.Model) - $($result.OS)" "Success"
-            Add-DriverPackToDB -Model $result.Model -OS $result.OS -Version "Latest" -Hash $result.Hash -FilePath $result.FilePath -Database $Database
-            $successCount++
-        } else {
-            Write-ColorOutput "Failed: $($result.Model) - $($result.OS) - $($result.Error)" "Error"
-        }
-    }
-    
-    $runspacePool.Close()
-    $runspacePool.Dispose()
-    
-    Write-ColorOutput "Download complete: $successCount/$totalJobs succeeded" "Header"
+    Write-Host ""
+    Write-Separator "="
+    Write-Host ""
+    Write-Host "  DOWNLOAD RESULTS" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "  Total Downloads : " -NoNewline -ForegroundColor Gray
+    Write-Host $totalJobs -ForegroundColor Cyan
+    Write-Host "  Successful      : " -NoNewline -ForegroundColor Gray
+    Write-Host $successCount -ForegroundColor Green
+    Write-Host "  Failed          : " -NoNewline -ForegroundColor Gray
+    Write-Host $failedCount -ForegroundColor $(if ($failedCount -gt 0) { "Red" } else { "Gray" })
+    Write-Host ""
+    Write-Separator "="
+    Write-Host ""
 }
+
 
 # ============================
 # Prerequisites Download Functions
@@ -452,7 +458,8 @@ function Download-Prerequisite {
             Start-Sleep -Milliseconds 500
             Write-Progress -Activity "$Name Download" -Completed
             return
-        } else {
+        }
+        else {
             throw "File not created after download"
         }
     }
@@ -503,8 +510,8 @@ function Get-Driver-Pack {
     Write-Host ""
     Write-Host "===============================================================================" -ForegroundColor Cyan
     Write-Host "                                                                               " -ForegroundColor Cyan
-    Write-Host "           Dell Driver Pack Downloader - Enhanced Edition                     " -ForegroundColor Cyan
-    Write-Host "           Author: Jobin Das (jobindas82@gmail.com)                           " -ForegroundColor Cyan
+    Write-Host "           Dell Driver Pack Downloader - Offline Edition                     " -ForegroundColor Cyan
+    Write-Host "           Author: Jobin Das (hello@jobin-d.com)                           " -ForegroundColor Cyan
     Write-Host "           GitHub: https://github.com/jobindas82                              " -ForegroundColor Cyan
     Write-Host "                                                                               " -ForegroundColor Cyan
     Write-Host "===============================================================================" -ForegroundColor Cyan
@@ -540,7 +547,8 @@ function Get-Driver-Pack {
                     $models += $m.name.Trim()
                 }
             }
-        } else {
+        }
+        else {
             if ($modelNode.name) {
                 $models += $modelNode.name.Trim()
             }
@@ -596,9 +604,11 @@ function Get-Driver-Pack {
             if ($os.Display) {
                 if ($os.Display.'#cdata-section') {
                     $osDisplay = $os.Display.'#cdata-section'
-                } elseif ($os.Display.'#text') {
+                }
+                elseif ($os.Display.'#text') {
                     $osDisplay = $os.Display.'#text'
-                } elseif ($os.Display -is [string]) {
+                }
+                elseif ($os.Display -is [string]) {
                     $osDisplay = $os.Display
                 }
             }
@@ -616,7 +626,8 @@ function Get-Driver-Pack {
                         break
                     }
                 }
-            } else {
+            }
+            else {
                 if ($osDisplay -ieq $TargetOS) {
                     $isTargetOS = $true
                 }
@@ -635,7 +646,7 @@ function Get-Driver-Pack {
             
             $destFolder = "$FilesRoot\$($osDisplay.Replace(' ', '_'))\$($matchedModel.Replace(' ', '_'))"
             if (!(Test-Path $destFolder)) { New-Item -ItemType Directory -Path $destFolder -Force | Out-Null }
-            
+
             # Use "pack" as base name but keep the original extension
             $fileName = Join-Path $destFolder "pack$fileExtension"
             
@@ -643,9 +654,11 @@ function Get-Driver-Pack {
             $pkgName = "Driver Pack"
             if ($pkg.Name.Display.'#cdata-section') {
                 $pkgName = $pkg.Name.Display.'#cdata-section'
-            } elseif ($pkg.Name.Display.'#text') {
+            }
+            elseif ($pkg.Name.Display.'#text') {
                 $pkgName = $pkg.Name.Display.'#text'
-            } elseif ($pkg.Name.Display -is [string]) {
+            }
+            elseif ($pkg.Name.Display -is [string]) {
                 $pkgName = $pkg.Name.Display
             }
             
@@ -671,7 +684,8 @@ DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             if ($pkg.hashMD5) {
                 $expectedHash = $pkg.hashMD5
                 Write-ColorOutput "   Hash (MD5): $expectedHash" "Info"
-            } else {
+            }
+            else {
                 Write-ColorOutput "   Warning: No MD5 hash found for this package, skipping for safety" "Warning"
                 continue
             }
@@ -686,12 +700,12 @@ DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
             Write-ColorOutput "   [QUEUE] Added to download queue (${originalFileName})" "Info"
             
             $downloadJobs += @{
-                Url = $downloadPath
+                Url         = $downloadPath
                 Destination = $fileName
-                Hash = $expectedHash
-                Model = $matchedModel
-                OS = $osDisplay
-                Name = $pkgName
+                Hash        = $expectedHash
+                Model       = $matchedModel
+                OS          = $osDisplay
+                Name        = $pkgName
             }
         }
         
@@ -712,9 +726,10 @@ DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     Write-Host ""
     
     if ($downloadJobs.Count -gt 0) {
-        Start-ParallelDownload -DownloadJobs $downloadJobs -Database $database
+        Start-SequentialDownload -DownloadJobs $downloadJobs -Database $database
         Save-Database -Database $database
-    } else {
+    }
+    else {
         Write-ColorOutput "No downloads needed. All driver packs are up to date!" "Success"
     }
     

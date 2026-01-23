@@ -1,9 +1,9 @@
 # ============================
-# Dell Driver Pack Installer - Enhanced Version
+# Dell Driver Pack Installer - Offline Edition
 # Features: Auto-detection, Progress bars, Colored output
 # Author: Jobin Das (jobindas82)
 # GitHub: https://github.com/jobindas82
-# Email: jobindas82@gmail.com
+# Email: hello@jobin-d.com
 # ============================
 
 #Requires -Version 5.1
@@ -160,19 +160,19 @@ function Write-ColorOutput {
     )
     
     $colors = @{
-        'Info' = 'Cyan'
+        'Info'    = 'Cyan'
         'Success' = 'Green'
         'Warning' = 'Yellow'
-        'Error' = 'Red'
-        'Header' = 'Magenta'
+        'Error'   = 'Red'
+        'Header'  = 'Magenta'
     }
     
     $prefix = switch ($Type) {
-        'Info'    { '[+]' }
+        'Info' { '[+]' }
         'Success' { '[OK]' }
         'Warning' { '[!]' }
-        'Error'   { '[X]' }
-        'Header'  { '[#]' }
+        'Error' { '[X]' }
+        'Header' { '[#]' }
     }
     
     Write-Host "$prefix $Message" -ForegroundColor $colors[$Type]
@@ -220,10 +220,10 @@ function Set-InstallationState {
     )
     
     $stateObj = @{
-        State = $State
-        Step = $Step
-        Details = $Details
-        Timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        State        = $State
+        Step         = $Step
+        Details      = $Details
+        Timestamp    = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
         ComputerName = $env:COMPUTERNAME
     }
     
@@ -328,15 +328,15 @@ function Get-SystemInfo {
         
         $model = $computerSystem.Model.Trim()
         $osName = if ($osInfo.Caption -match "Windows 11") { "Windows 11 x64" } 
-                  elseif ($osInfo.Caption -match "Windows 10") { "Windows 10 x64" } 
-                  else { "Unknown" }
+        elseif ($osInfo.Caption -match "Windows 10") { "Windows 10 x64" } 
+        else { "Unknown" }
         
         Write-ColorOutput "System Model: $model" "Info"
         Write-ColorOutput "Operating System: $osName" "Info"
         
         return @{
-            Model = $model
-            OS = $osName
+            Model        = $model
+            OS           = $osName
             Architecture = $osInfo.OSArchitecture
         }
     }
@@ -365,22 +365,6 @@ function Get-DcuPath {
     return $null
 }
 
-function Get-DcuVersion {
-    param([string]$DcuPath)
-    
-    try {
-        if (Test-Path $DcuPath) {
-            $versionOutput = & $DcuPath /version 2>&1 | Out-String
-            if ($versionOutput -match "(\d+\.\d+\.\d+)") {
-                return [version]$matches[1]
-            }
-        }
-    }
-    catch {
-        Write-Log "Failed to get DCU version: $_"
-    }
-    return $null
-}
 
 function Get-InstalledDcuVersion {
     try {
@@ -392,7 +376,7 @@ function Get-InstalledDcuVersion {
         
         foreach ($regPath in $regPaths) {
             $apps = Get-ItemProperty $regPath -ErrorAction SilentlyContinue | 
-                    Where-Object { $_.DisplayName -like "*Dell Command*Update*" }
+            Where-Object { $_.DisplayName -like "*Dell Command*Update*" }
             
             if ($apps) {
                 foreach ($app in $apps) {
@@ -424,7 +408,7 @@ function Uninstall-DellCommandUpdate {
         
         foreach ($regPath in $regPaths) {
             $apps = Get-ItemProperty $regPath -ErrorAction SilentlyContinue | 
-                    Where-Object { $_.DisplayName -like "*Dell Command*Update*" }
+            Where-Object { $_.DisplayName -like "*Dell Command*Update*" }
             
             if ($apps) {
                 $uninstallString = $apps[0].UninstallString
@@ -520,7 +504,8 @@ function Install-DotNetRuntime {
             Start-Sleep -Milliseconds 500
             Write-Progress -Activity ".NET Runtime Installation" -Completed
             return
-        } else {
+        }
+        else {
             throw "Installation failed with exit code: $($process.ExitCode)"
         }
     }
@@ -541,9 +526,11 @@ function Install-DellCommandUpdate {
     # Define minimum required version based on preference
     $minimumVersion = if ($PreferredVersion -eq "5.4") { 
         [version]"5.4.0" 
-    } elseif ($PreferredVersion -eq "5.5") { 
+    }
+    elseif ($PreferredVersion -eq "5.5") { 
         [version]"5.5.0" 
-    } else { 
+    }
+    else { 
         [version]"5.6.0" 
     }
     $needsReinstall = $false
@@ -651,10 +638,12 @@ function Install-DellCommandUpdate {
                 Start-Sleep -Milliseconds 500
                 Write-Progress -Activity "DCU Installation" -Completed
                 return $dcuPath
-            } else {
+            }
+            else {
                 throw "Installation completed but DCU not found"
             }
-        } else {
+        }
+        else {
             throw "Installation failed with exit code: $($process.ExitCode)"
         }
     }
@@ -719,164 +708,6 @@ function Set-OfflineDriverPack {
     }
 }
 
-function Install-Drivers {
-    param(
-        [string]$DcuPath,
-        [string]$PackPath
-    )
-    
-    Write-ColorOutput "Starting driver installation..." "Header"
-    Write-Host ""
-    
-    # Verify pack path exists
-    if (!(Test-Path $PackPath)) {
-        Write-ColorOutput "Driver pack not found at: $PackPath" "Error"
-        Write-ColorOutput "Attempting online installation via Dell Command Update..." "Warning"
-        
-        $process = Start-Process -FilePath $DcuPath -ArgumentList "/driverinstall" -Wait -PassThru -NoNewWindow
-        Write-Host ""
-        Write-ColorOutput "Online installation completed with exit code: $($process.ExitCode)" "Info"
-        return $process.ExitCode
-    }
-    
-    # Use temp directory on C: drive for extraction
-    $extractPath = Join-Path $TempRoot "extracted"
-    
-    if (Test-Path $extractPath) {
-        Write-ColorOutput "Cleaning up previous extraction..." "Info"
-        Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    
-    Write-ColorOutput "Extracting driver pack..." "Info"
-    Show-ProgressBar -Activity "Driver Installation" -Status "Extracting driver pack..." -PercentComplete 10
-    
-    try {
-        New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
-        
-        # Use 7-Zip to extract CAB
-        $sevenZip = "C:\Program Files\7-Zip\7z.exe"
-        if (!(Test-Path $sevenZip)) {
-            $sevenZip = "C:\Program Files (x86)\7-Zip\7z.exe"
-        }
-        
-        if (!(Test-Path $sevenZip)) {
-            Write-ColorOutput "7-Zip not found. Please install 7-Zip to extract driver packs." "Error"
-            throw "7-Zip not found"
-        }
-        
-        $expandResult = Start-Process $sevenZip -ArgumentList "x `"$PackPath`" -o`"$extractPath`" -y" -Wait -PassThru -NoNewWindow
-        
-        if ($expandResult.ExitCode -ne 0) {
-            throw "Failed to extract CAB file (Exit code: $($expandResult.ExitCode))"
-        }
-        
-        Write-ColorOutput "Driver pack extracted successfully" "Success"
-        
-        # Look for the actual driver installation executable
-        $setupFiles = @(
-            (Get-ChildItem -Path $extractPath -Filter "*.exe" -Recurse | Where-Object { $_.Name -like "*install*" -or $_.Name -like "*setup*" } | Select-Object -First 1),
-            (Get-ChildItem -Path $extractPath -Filter "*.exe" -Recurse | Select-Object -First 1)
-        ) | Where-Object { $_ -ne $null } | Select-Object -First 1
-        
-        if ($setupFiles) {
-            Write-ColorOutput "Found installer: $($setupFiles.Name)" "Info"
-            Show-ProgressBar -Activity "Driver Installation" -Status "Installing drivers..." -PercentComplete 50
-            
-            $installArgs = @("/s", "/silent", "/quiet", "/norestart")
-            $process = Start-Process -FilePath $setupFiles.FullName -ArgumentList $installArgs -Wait -PassThru -NoNewWindow
-            
-            Show-ProgressBar -Activity "Driver Installation" -Status "Complete" -PercentComplete 100
-            Start-Sleep -Milliseconds 500
-            Write-Progress -Activity "Driver Installation" -Completed
-            
-            Write-Host ""
-            if ($process.ExitCode -eq 0) {
-                Write-ColorOutput "Driver installation completed successfully" "Success"
-                Write-ColorOutput "A system restart may be required" "Warning"
-            } elseif ($process.ExitCode -eq 3010 -or $process.ExitCode -eq 500) {
-                Write-ColorOutput "Driver installation completed - restart required" "Warning"
-            } else {
-                Write-ColorOutput "Driver installation completed with exit code: $($process.ExitCode)" "Warning"
-            }
-            
-            # Cleanup extraction directory
-            if (Test-Path $extractPath) {
-                Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            
-            return $process.ExitCode
-        } else {
-            # No installer found, use DCU online mode as fallback
-            Write-ColorOutput "No installer found in pack, using Dell Command Update online mode..." "Warning"
-            Show-ProgressBar -Activity "Driver Installation" -Status "Installing drivers online..." -PercentComplete 50
-            
-            $process = Start-Process -FilePath $DcuPath -ArgumentList "/driverinstall" -Wait -PassThru -NoNewWindow
-            
-            Show-ProgressBar -Activity "Driver Installation" -Status "Complete" -PercentComplete 100
-            Start-Sleep -Milliseconds 500
-            Write-Progress -Activity "Driver Installation" -Completed
-            
-            Write-Host ""
-            Write-ColorOutput "Driver installation completed with exit code: $($process.ExitCode)" "Info"
-            
-            # Cleanup extraction directory
-            if (Test-Path $extractPath) {
-                Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
-            }
-            
-            return $process.ExitCode
-        }
-    }
-    catch {
-        $errorMsg = $_.Exception.Message
-        Write-ColorOutput "Driver installation failed: $errorMsg" "Error"
-        
-        # Cleanup extraction directory
-        if (Test-Path $extractPath) {
-            Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        
-        # Fallback to DCU online mode
-        Write-ColorOutput "Attempting online installation via Dell Command Update..." "Warning"
-        
-        $process = Start-Process -FilePath $DcuPath -ArgumentList "/driverinstall" -Wait -PassThru -NoNewWindow
-        Write-Host ""
-        Write-ColorOutput "Fallback installation completed with exit code: $($process.ExitCode)" "Info"
-        
-        return $process.ExitCode
-    }
-}
-
-function Test-InternetConnection {
-    try {
-        $result = Test-Connection -ComputerName "8.8.8.8" -Count 1 -Quiet -ErrorAction Stop
-        return $result
-    }
-    catch {
-        return $false
-    }
-}
-
-function Wait-ForInternet {
-    Write-ColorOutput "No internet connection detected" "Warning"
-    Write-Host ""
-    Write-Host "  Waiting for internet connection..." -ForegroundColor Yellow
-    Write-Host "  Press Ctrl+C to cancel" -ForegroundColor Gray
-    Write-Host ""
-    
-    $attempt = 0
-    while (-not (Test-InternetConnection)) {
-        $attempt++
-        Write-Host "`r  Checking... (attempt $attempt)" -NoNewline -ForegroundColor Cyan
-        Start-Sleep -Seconds 5
-    }
-    
-    Write-Host ""
-    Write-Host ""
-    Write-ColorOutput "Internet connection established!" "Success"
-    Start-Sleep -Seconds 2
-}
-
 function Install-DriversOffline {
     param(
         [string]$DcuPath,
@@ -928,24 +759,205 @@ function Install-DriversOffline {
         Write-Separator "-"
         Write-Host ""
         
+        
         Write-Log "DCU Exit Code: $exitCode"
         
-        # Check if installation was successful
-        if ($exitCode -eq 0) {
-            Set-InstallationState -State "COMPLETED" -Step "Offline Driver Installation" -Details "Success"
-            Write-ColorOutput "Offline driver installation completed successfully" "Success"
-            Write-ColorOutput "A system restart may be required" "Warning"
-            return $true
-        }
-        elseif ($exitCode -eq 3010 -or $exitCode -eq 500) {
-            Set-InstallationState -State "COMPLETED" -Step "Offline Driver Installation" -Details "Success - Restart required"
-            Write-ColorOutput "Offline driver installation completed - restart required" "Warning"
-            return $true
-        }
-        else {
-            Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Exit code: $exitCode"
-            Write-ColorOutput "Offline installation failed with exit code: $exitCode" "Error"
-            return $false
+        # Comprehensive DCU CLI exit code handling
+        switch ($exitCode) {
+            # Success codes
+            0 {
+                Set-InstallationState -State "COMPLETED" -Step "Offline Driver Installation" -Details "Success"
+                Write-ColorOutput "Offline driver installation completed successfully" "Success"
+                Write-ColorOutput "A system restart may be required" "Warning"
+                return $true
+            }
+            1 {
+                Set-InstallationState -State "COMPLETED" -Step "Offline Driver Installation" -Details "Success - Reboot required"
+                Write-ColorOutput "Driver installation completed successfully" "Success"
+                Write-ColorOutput "A system reboot is required to complete the operation" "Warning"
+                return $true
+            }
+            
+            # Generic application errors (2-8)
+            2 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Unknown application error"
+                Write-ColorOutput "An unknown application error has occurred" "Error"
+                return $false
+            }
+            3 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Not a Dell system"
+                Write-ColorOutput "The current system manufacturer is not Dell" "Error"
+                Write-ColorOutput "Dell Command | Update can only be run on Dell systems" "Error"
+                return $false
+            }
+            4 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Insufficient privileges"
+                Write-ColorOutput "The CLI was not launched with administrative privilege" "Error"
+                Write-ColorOutput "Please run this script as Administrator" "Warning"
+                return $false
+            }
+            5 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Reboot pending"
+                Write-ColorOutput "A reboot is pending from a previous operation" "Error"
+                Write-ColorOutput "Please reboot the system and try again" "Warning"
+                return $false
+            }
+            6 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Another instance running"
+                Write-ColorOutput "Another instance of Dell Command | Update is already running" "Error"
+                Write-ColorOutput "Close any running instance of DCU UI or CLI and retry" "Warning"
+                return $false
+            }
+            7 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "System model not supported"
+                Write-ColorOutput "The application does not support the current system model" "Error"
+                Write-ColorOutput "Contact your administrator if the current system model is not supported" "Warning"
+                return $false
+            }
+            8 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "No update filters"
+                Write-ColorOutput "No update filters have been applied or configured" "Error"
+                return $false
+            }
+            
+            # Scan operation errors (500-503)
+            500 {
+                Set-InstallationState -State "COMPLETED" -Step "Offline Driver Installation" -Details "No updates found"
+                Write-ColorOutput "No updates were found for the system" "Warning"
+                Write-ColorOutput "The system is up to date or no updates match the provided filters" "Info"
+                return $true
+            }
+            501 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Error determining updates"
+                Write-ColorOutput "An error occurred while determining the available updates" "Error"
+                Write-ColorOutput "Please retry the operation" "Warning"
+                return $false
+            }
+            502 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Scan operation canceled"
+                Write-ColorOutput "The scan operation was canceled" "Warning"
+                return $false
+            }
+            503 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Download error during scan"
+                Write-ColorOutput "An error occurred while downloading a file during the scan operation" "Error"
+                Write-ColorOutput "Check your network connection and ensure there is Internet connectivity" "Warning"
+                return $false
+            }
+            
+            # Apply updates errors (1000-1002)
+            1000 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Error retrieving apply updates result"
+                Write-ColorOutput "An error occurred when retrieving the result of the apply updates operation" "Error"
+                Write-ColorOutput "Please retry the operation" "Warning"
+                return $false
+            }
+            1001 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Apply updates canceled"
+                Write-ColorOutput "The apply updates operation was canceled" "Warning"
+                return $false
+            }
+            1002 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Download error during apply"
+                Write-ColorOutput "An error occurred while downloading a file during the apply updates operation" "Error"
+                Write-ColorOutput "Check your network connection and ensure there is Internet connectivity" "Warning"
+                return $false
+            }
+            
+            # Driver install errors (2000-2007)
+            2000 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Error retrieving driver install result"
+                Write-ColorOutput "An error occurred when retrieving the result of the Advanced Driver Restore operation" "Error"
+                Write-ColorOutput "Please retry the operation" "Warning"
+                return $false
+            }
+            2001 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Advanced Driver Restore failed"
+                Write-ColorOutput "The Advanced Driver Restore process failed" "Error"
+                Write-ColorOutput "Please retry the operation" "Warning"
+                return $false
+            }
+            2002 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Multiple driver CABs provided"
+                Write-ColorOutput "Multiple driver CABs were provided for the Advanced Driver Restore operation" "Error"
+                Write-ColorOutput "Ensure that you provide only one driver CAB file" "Warning"
+                return $false
+            }
+            2003 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Invalid driver CAB path"
+                Write-ColorOutput "An invalid path for the driver CAB was provided" "Error"
+                Write-ColorOutput "Ensure that the file path exists and has valid permissions" "Warning"
+                return $false
+            }
+            2004 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Driver install canceled"
+                Write-ColorOutput "The driver install operation was canceled" "Warning"
+                return $false
+            }
+            2005 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Download error during driver install"
+                Write-ColorOutput "An error occurred while downloading a file during the driver install operation" "Error"
+                Write-ColorOutput "Check your network connection and ensure there is Internet connectivity" "Warning"
+                return $false
+            }
+            2006 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Advanced Driver Restore disabled"
+                Write-ColorOutput "The Advanced Driver Restore feature is disabled" "Error"
+                Write-ColorOutput "Enable the feature using: /configure -advancedDriverRestore=enable" "Warning"
+                return $false
+            }
+            2007 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Advanced Driver Restore not supported"
+                Write-ColorOutput "The Advanced Driver Restore feature is not supported" "Error"
+                Write-ColorOutput "Disable FIPS mode on the system" "Warning"
+                return $false
+            }
+            
+            # Dell Client Management Service errors (3000-3005)
+            3000 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Service not running"
+                Write-ColorOutput "The Dell Client Management Service is not running" "Error"
+                Write-ColorOutput "Start the Dell Client Management Service in Windows services" "Warning"
+                return $false
+            }
+            3001 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Service not installed"
+                Write-ColorOutput "The Dell Client Management Service is not installed" "Error"
+                Write-ColorOutput "Download and install the Dell Client Management Service from Dell support site" "Warning"
+                return $false
+            }
+            3002 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Service disabled"
+                Write-ColorOutput "The Dell Client Management Service is disabled" "Error"
+                Write-ColorOutput "Enable the Dell Client Management Service from Windows services" "Warning"
+                return $false
+            }
+            3003 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Service busy"
+                Write-ColorOutput "The Dell Client Management Service is busy" "Error"
+                Write-ColorOutput "Wait until the service is available to process new requests" "Warning"
+                return $false
+            }
+            3004 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Service self-update in progress"
+                Write-ColorOutput "The Dell Client Management Service has initiated a self-update install" "Error"
+                Write-ColorOutput "Wait until the service is available to process new requests" "Warning"
+                return $false
+            }
+            3005 {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Service installing updates"
+                Write-ColorOutput "The Dell Client Management Service is installing pending updates" "Error"
+                Write-ColorOutput "Wait until the service is available to process new requests" "Warning"
+                return $false
+            }
+            
+            # Any other exit code
+            default {
+                Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Exit code: $exitCode"
+                Write-ColorOutput "Offline installation failed with exit code: $exitCode" "Error"
+                Write-ColorOutput "Please check the Dell Command | Update documentation for this error code" "Warning"
+                return $false
+            }
         }
     }
     catch {
@@ -953,45 +965,6 @@ function Install-DriversOffline {
         Set-InstallationState -State "FAILED" -Step "Offline Driver Installation" -Details "Exception: $errorMsg"
         Write-ColorOutput "Offline installation failed: $errorMsg" "Error"
         return $false
-    }
-}
-
-function Reset-DcuToOnlineMode {
-    param([string]$DcuPath)
-    
-    Write-Header "RECONFIGURING DCU FOR ONLINE UPDATES"
-    
-    Write-ColorOutput "Switching DCU to online mode for future updates..." "Info"
-    Show-ProgressBar -Activity "DCU Reconfiguration" -Status "Configuring online mode..." -PercentComplete 30
-    
-    try {
-        # Clear the driver library location to switch back to online mode
-        Write-Host ""
-        & $DcuPath /configure -driverLibraryLocation=""
-        Write-Host ""
-        
-        Write-ColorOutput "Offline driver library location cleared" "Success"
-        
-        Show-ProgressBar -Activity "DCU Reconfiguration" -Status "Enabling Dell online downloads..." -PercentComplete 60
-        
-        # Enable download from Dell
-        Write-Host ""
-        & $DcuPath /configure -downloadLibrary=enable
-        Write-Host ""
-        
-        Write-ColorOutput "Dell online driver library enabled" "Success"
-        
-        Show-ProgressBar -Activity "DCU Reconfiguration" -Status "Complete" -PercentComplete 100
-        Start-Sleep -Milliseconds 500
-        Write-Progress -Activity "DCU Reconfiguration" -Completed
-        
-        Write-Host ""
-        Write-ColorOutput "DCU configured to use Dell online driver updates for future installations" "Success"
-    }
-    catch {
-        $errorMsg = $_.Exception.Message
-        Write-ColorOutput "Failed to reconfigure DCU: $errorMsg" "Warning"
-        Write-ColorOutput "You may need to configure DCU manually for online updates" "Warning"
     }
 }
 
@@ -1072,7 +1045,7 @@ function Start-Installation {
     Write-Host "===============================================================================" -ForegroundColor Cyan
     Write-Host "                                                                               " -ForegroundColor Cyan
     Write-Host "           Dell Driver Pack Installer - Offline Edition                       " -ForegroundColor Cyan
-    Write-Host "           Author: Jobin Das (jobindas82@gmail.com)                           " -ForegroundColor Cyan
+    Write-Host "           Author: Jobin Das (hello@jobin-d.com)                           " -ForegroundColor Cyan
     Write-Host "           GitHub: https://github.com/jobindas82                              " -ForegroundColor Cyan
     Write-Host "                                                                               " -ForegroundColor Cyan
     Write-Host "===============================================================================" -ForegroundColor Cyan
@@ -1172,7 +1145,7 @@ function Start-Installation {
                 
                 # Check if this folder has a pack file
                 $testPack = Get-ChildItem -Path $folder.FullName -File | 
-                            Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
+                Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
                 
                 if ($testPack) {
                     return $folder.FullName
@@ -1191,7 +1164,7 @@ function Start-Installation {
         
         # Look for pack files with common extensions
         $packFiles = Get-ChildItem -Path $packFolder -File | 
-                     Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
+        Where-Object { $_.BaseName -eq "pack" -and $_.Extension -match '\.(cab|exe)$' }
         
         if ($packFiles) {
             $packPath = $packFiles[0].FullName
@@ -1207,7 +1180,8 @@ function Start-Installation {
                     Write-Host "  Catalog Model: $($matches[1])" -ForegroundColor Gray
                 }
             }
-        } else {
+        }
+        else {
             Write-ColorOutput "Pack file not found in folder" "Warning"
         }
     }
@@ -1252,11 +1226,6 @@ function Start-Installation {
     
     Write-Host ""
     
-    # Reconfigure DCU to use online mode after successful offline installation
-    Reset-DcuToOnlineMode -DcuPath $dcuPath
-    
-    Write-Host ""
-    
     # Run custom configuration
     Invoke-CustomConfiguration
     
@@ -1279,7 +1248,8 @@ function Start-Installation {
         Clear-InstallationState
         Start-Sleep -Seconds 5
         Restart-Computer -Force
-    } else {
+    }
+    else {
         Write-Host ""
         Write-ColorOutput "Please restart your computer to complete the installation" "Warning"
         Write-Host ""
