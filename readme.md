@@ -2,7 +2,7 @@
 
 **Author:** Jobin Das (jobindas82)  
 **GitHub:** https://github.com/jobindas82  
-**Email:** jobindas82@gmail.com
+**Email:** hello@jobin-d.com
 
 Automated solution for downloading and installing Dell driver packs for multiple computer models.
 
@@ -10,7 +10,6 @@ Automated solution for downloading and installing Dell driver packs for multiple
 
 - ✅ Automated driver pack downloads from Dell
 - ✅ Support for multiple Dell models
-- ✅ Parallel downloads (3 concurrent)
 - ✅ MD5 hash verification
 - ✅ Version tracking and caching
 - ✅ Automatic Dell Command Update installation
@@ -23,8 +22,6 @@ Automated solution for downloading and installing Dell driver packs for multiple
 
 - Windows 10/11
 - PowerShell 5.1 or later
-- 7-Zip (for catalog extraction)
-- Internet connection (for downloads)
 - Administrator rights (for Install.ps1)
 
 ## Quick Start
@@ -76,8 +73,7 @@ TargetOS = "Windows 11 x64"  # or "Windows 10 x64"
 .
 ├── Download.ps1           # Main download script
 ├── Install.ps1            # Driver installation script
-├── config.psd1            # Your configuration (create from sample)
-├── config.sample.psd1     # Sample configuration
+├── config.psd1            # Your configuration
 ├── README.md              # This file
 └── files/                 # Downloaded files (auto-created)
     ├── dcu/               # Dell Command Update installer
@@ -119,9 +115,6 @@ URLs for Dell Command Update and .NET Runtime. Update these if newer versions ar
 
 ## Common Issues
 
-### 7-Zip Not Found
-Install 7-Zip from: https://www.7-zip.org/
-
 ### Config File Not Found
 Run `Download.ps1` once to create the default config, then update it.
 
@@ -147,9 +140,6 @@ Both logs are in the `files/` directory.
 
 ## Advanced Usage
 
-### Parallel Downloads
-Modify `$MaxParallelDownloads` in `Download.ps1` (default: 3)
-
 ### Offline Installation
 1. Copy the entire `files/` folder to a USB drive
 2. Run `Install.ps1` from the USB drive on target computers
@@ -164,8 +154,10 @@ TargetOS = @("Windows 11 x64", "Windows 10 x64")
 
 For issues, questions, or contributions:
 - GitHub: https://github.com/jobindas82
-- Email: jobindas82@gmail.com
+- Email: hello@jobin-d.com
 
 ## License
+
+MIT License
 
 This project is provided as-is for use with Dell computers. Dell, Dell Command Update, and related trademarks are property of Dell Inc.
