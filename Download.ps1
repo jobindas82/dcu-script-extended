@@ -67,6 +67,9 @@ if (!(Test-Path $configPath)) {
     DotNetUrl      = "https://download.visualstudio.microsoft.com/download/pr/907765b0-2bf8-494e-93aa-5ef9553c5d68/a9308dc010617e6716c0e6abd53b05ce/windowsdesktop-runtime-8.0.11-win-x64.exe"
     DotNetFileName = "windowsdesktop-runtime-8.0-win-x64.exe"
 
+    # Download delay in seconds (to prevent Dell servers from blocking)
+    DownloadDelaySeconds = 3
+
     TargetModels   = @(
         "Dell Pro 14 Plus PB14250"
         "Dell Pro Max 16 Premium MA16250"
@@ -130,6 +133,7 @@ $DcuFileName54 = $config.DcuFileName54
 $DcuFileName56 = $config.DcuFileName56
 $DotNetUrl = $config.DotNetUrl
 $DotNetFileName = $config.DotNetFileName
+$DownloadDelaySeconds = if ($config.DownloadDelaySeconds) { $config.DownloadDelaySeconds } else { 3 }
 
 # Paths
 $LogFile = Join-Path $FilesRoot "Download.log"
@@ -246,12 +250,31 @@ function Add-DriverPackToDB {
         $Database
     )
     
-    $existing = Get-DriverPackFromDB -Model $Model -OS $OS -Database $Database
-    if ($existing) {
-        $Database.DriverPacks = $Database.DriverPacks | Where-Object { -not ($_.Model -eq $Model -and $_.OS -eq $OS) }
+    # Ensure DriverPacks is a mutable array
+    if ($Database.DriverPacks -isnot [System.Collections.ArrayList]) {
+        $tempList = [System.Collections.ArrayList]::new()
+        if ($Database.DriverPacks) {
+            foreach ($item in $Database.DriverPacks) {
+                $null = $tempList.Add($item)
+            }
+        }
+        $Database.DriverPacks = $tempList
     }
     
-    $Database.DriverPacks += @{
+    # Remove existing entry for this Model/OS combination
+    $existing = Get-DriverPackFromDB -Model $Model -OS $OS -Database $Database
+    if ($existing) {
+        $itemsToKeep = [System.Collections.ArrayList]::new()
+        foreach ($pack in $Database.DriverPacks) {
+            if (-not ($pack.Model -eq $Model -and $pack.OS -eq $OS)) {
+                $null = $itemsToKeep.Add($pack)
+            }
+        }
+        $Database.DriverPacks = $itemsToKeep
+    }
+    
+    # Create new entry
+    $newEntry = [PSCustomObject]@{
         Model      = $Model
         OS         = $OS
         Version    = $Version
@@ -259,6 +282,9 @@ function Add-DriverPackToDB {
         FilePath   = $FilePath
         Downloaded = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     }
+    
+    # Add to database
+    $null = $Database.DriverPacks.Add($newEntry)
 }
 
 # ============================
@@ -397,8 +423,11 @@ function Start-SequentialDownload {
             $failedCount++
         }
         
-        # Small delay between downloads
-        Start-Sleep -Milliseconds 500
+        # Delay between downloads to prevent Dell servers from blocking
+        if ($currentJob -lt $totalJobs) {
+            Write-ColorOutput "Waiting $DownloadDelaySeconds seconds before next download..." "Info"
+            Start-Sleep -Seconds $DownloadDelaySeconds
+        }
     }
     
     Write-Progress -Activity "Downloading Driver Packs" -Completed
