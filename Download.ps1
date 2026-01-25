@@ -203,6 +203,143 @@ function Show-ProgressBar {
     Write-Progress -Activity $Activity -Status $Status -PercentComplete $PercentComplete -Id $Id
 }
 
+function Show-DriverPackSelectionMenu {
+    param(
+        [array]$DownloadJobs
+    )
+    
+    if ($DownloadJobs.Count -eq 0) {
+        return @()
+    }
+    
+    Write-Host ""
+    Write-Separator "="
+    Write-Host ""
+    Write-Host "  DRIVER PACK SELECTION MENU" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Separator "="
+    Write-Host ""
+    Write-Host "The following driver packs are " -NoNewline -ForegroundColor Cyan
+    Write-Host "NEW or have UPDATES available" -NoNewline -ForegroundColor Green
+    Write-Host ":" -ForegroundColor Cyan
+    Write-Host "(Already up-to-date packs are not shown)" -ForegroundColor DarkGray
+    Write-Host ""
+    
+    # Display numbered list
+    for ($i = 0; $i -lt $DownloadJobs.Count; $i++) {
+        $job = $DownloadJobs[$i]
+        $num = $i + 1
+        Write-Host "  [$num] " -NoNewline -ForegroundColor Yellow
+        Write-Host "$($job.Model)" -NoNewline -ForegroundColor White
+        Write-Host " | " -NoNewline -ForegroundColor DarkGray
+        Write-Host "$($job.OS)" -NoNewline -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "      Package: $($job.Name)" -ForegroundColor Gray
+    }
+    
+    Write-Host ""
+    Write-Separator "-"
+    Write-Host ""
+    Write-Host "Select driver packs to download:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  - Press Enter or type 'all' to download all packs" -ForegroundColor Gray
+    Write-Host "  - Enter numbers separated by commas (e.g., 1,3,5)" -ForegroundColor Gray
+    Write-Host "  - Enter ranges (e.g., 1-3 or 1,3-5,7)" -ForegroundColor Gray
+    Write-Host "  - Type 'none' or '0' to skip all downloads" -ForegroundColor Gray
+    Write-Host ""
+    
+    while ($true) {
+        Write-Host "Your selection: " -NoNewline -ForegroundColor Green
+        $input = Read-Host
+        
+        # Handle empty input or "all"
+        if ([string]::IsNullOrWhiteSpace($input) -or $input -ieq "all") {
+            Write-ColorOutput "Selected all $($DownloadJobs.Count) driver pack(s)" "Success"
+            return $DownloadJobs
+        }
+        
+        # Handle "none" or "0"
+        if ($input -ieq "none" -or $input -eq "0") {
+            Write-ColorOutput "No driver packs selected. Skipping downloads." "Warning"
+            return @()
+        }
+        
+        # Parse selection
+        $selectedIndices = @()
+        $valid = $true
+        
+        try {
+            # Split by comma
+            $parts = $input -split ','
+            
+            foreach ($part in $parts) {
+                $part = $part.Trim()
+                
+                # Check if it's a range (e.g., "1-3")
+                if ($part -match '^(\d+)-(\d+)$') {
+                    $start = [int]$matches[1]
+                    $end = [int]$matches[2]
+                    
+                    if ($start -lt 1 -or $end -gt $DownloadJobs.Count -or $start -gt $end) {
+                        Write-ColorOutput "Invalid range: $part (valid range: 1-$($DownloadJobs.Count))" "Error"
+                        $valid = $false
+                        break
+                    }
+                    
+                    for ($i = $start; $i -le $end; $i++) {
+                        $selectedIndices += ($i - 1)
+                    }
+                }
+                # Single number
+                elseif ($part -match '^\d+$') {
+                    $num = [int]$part
+                    
+                    if ($num -lt 1 -or $num -gt $DownloadJobs.Count) {
+                        Write-ColorOutput "Invalid selection: $num (valid range: 1-$($DownloadJobs.Count))" "Error"
+                        $valid = $false
+                        break
+                    }
+                    
+                    $selectedIndices += ($num - 1)
+                }
+                else {
+                    Write-ColorOutput "Invalid input format: $part" "Error"
+                    $valid = $false
+                    break
+                }
+            }
+        }
+        catch {
+            Write-ColorOutput "Error parsing input: $($_.Exception.Message)" "Error"
+            $valid = $false
+        }
+        
+        if ($valid -and $selectedIndices.Count -gt 0) {
+            # Remove duplicates and sort
+            $selectedIndices = $selectedIndices | Select-Object -Unique | Sort-Object
+            
+            # Get selected jobs
+            $selectedJobs = @()
+            foreach ($index in $selectedIndices) {
+                $selectedJobs += $DownloadJobs[$index]
+            }
+            
+            Write-Host ""
+            Write-ColorOutput "Selected $($selectedJobs.Count) driver pack(s):" "Success"
+            foreach ($job in $selectedJobs) {
+                Write-Host "  - $($job.Model) | $($job.OS)" -ForegroundColor Cyan
+            }
+            Write-Host ""
+            
+            return $selectedJobs
+        }
+        
+        Write-Host ""
+        Write-Host "Please try again." -ForegroundColor Yellow
+        Write-Host ""
+    }
+}
+
 # ============================
 # Database Functions
 # ============================
@@ -755,8 +892,30 @@ DownloadDate=$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     Write-Host ""
     
     if ($downloadJobs.Count -gt 0) {
-        Start-SequentialDownload -DownloadJobs $downloadJobs -Database $database
-        Save-Database -Database $database
+        # Show interactive selection menu
+        $selectedJobs = Show-DriverPackSelectionMenu -DownloadJobs $downloadJobs
+        
+        if ($selectedJobs.Count -gt 0) {
+            # Update summary with selection info
+            Write-Host ""
+            Write-Separator "-"
+            Write-Host ""
+            Write-Host "  FINAL DOWNLOAD SUMMARY" -ForegroundColor Magenta
+            Write-Host ""
+            Write-Host "  Selected Packs    : " -NoNewline -ForegroundColor Gray
+            Write-Host "$($selectedJobs.Count) of $($downloadJobs.Count)" -ForegroundColor Green
+            Write-Host "  Up-to-date Packs  : " -NoNewline -ForegroundColor Gray
+            Write-Host $skippedCount -ForegroundColor Cyan
+            Write-Host ""
+            Write-Separator "-"
+            Write-Host ""
+            
+            Start-SequentialDownload -DownloadJobs $selectedJobs -Database $database
+            Save-Database -Database $database
+        }
+        else {
+            Write-ColorOutput "No driver packs selected. Skipping download process." "Warning"
+        }
     }
     else {
         Write-ColorOutput "No downloads needed. All driver packs are up to date!" "Success"
